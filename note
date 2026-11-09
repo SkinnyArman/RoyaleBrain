@@ -1,0 +1,10 @@
+#!/bin/bash
+# Tell the bot what was good or bad in a match. It becomes training data.
+#   ./note 106 bad          that moment was a bad play (text is optional)
+#   ./note 56 good          that moment was a good play
+#   ./note --run 20261109-010908 135 bad "log only hit wizard and valk"
+# The decisions within 2s of that moment get your verdict as their label (stronger than the
+# tower-HP outcome). Optional text goes to docs/insights-log.md. The model never reads the text: it
+# generalises from the situation's numbers (profiles), so one note teaches a pattern, not a combo.
+cd "$(dirname "$0")" || exit 1
+exec .venv/bin/python -m tools.note "$@" 2>&1 | grep -v "objc\["

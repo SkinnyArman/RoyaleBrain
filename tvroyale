@@ -1,0 +1,5 @@
+#!/bin/bash
+# From the main page: open TV Royale, watch N replays, record both players' plays as learning data.
+#   ./tvroyale 10
+cd "$(dirname "$0")" || exit 1
+.venv/bin/python -m tools.tvroyale "${1:-5}" 2>&1 | grep --line-buffered -v "objc\["

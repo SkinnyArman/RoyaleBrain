@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+shots/
+runs/
+.DS_Store
+.pytest_cache/
+models/
+.env
+datasets/tv/

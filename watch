@@ -1,0 +1,29 @@
+#!/bin/bash
+# Watch YOU play real matches and learn from them. The bot never taps in this mode.
+#   ./watch          watch 5 matches (start each one on the phone; Ctrl+C to stop early)
+#   ./watch 3        watch 3 matches
+# For every match: your plays (card + spot) are logged as training data with their outcomes,
+# with a snapshot of each detected play in runs/<id>/human_plays/ to check the detection.
+# At the end: retrain on everything, then a report of what was learned.
+cd "$(dirname "$0")" || exit 1
+n=${1:-5}
+stop=0
+trap 'stop=1' INT
+first_run=$(ls -t runs | grep -v replays | head -1)
+for i in $(seq 1 "$n"); do
+  [ $stop -eq 1 ] && break
+  echo "=== match $i of $n: start it on the phone (Ctrl+C to stop) ==="
+  set -o pipefail
+  .venv/bin/python -m bot.main --observe --wait 1800 2>&1 | grep --line-buffered -v "objc\["
+  status=$?
+  if [ $status -ne 0 ] && [ $stop -eq 0 ]; then
+    echo "stopped: see the message above (phone not connected? no match in 30 min?)"
+    break
+  fi
+done
+trap - INT
+echo; echo "fetching the battle log (true results + both decks)..."
+.venv/bin/python -m tools.battlelog 2>&1 | grep -v "objc\["
+echo; echo "retraining on all matches..."
+.venv/bin/python -m tools.train_policy 2>&1 | grep -v "objc\["
+echo; .venv/bin/python -m tools.report --since "$first_run" 2>&1 | grep -v "objc\["

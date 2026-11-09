@@ -1,0 +1,37 @@
+{
+ "dark_prince": {
+  "lifetime_s": 8.7,
+  "seen": 5,
+  "speed_px": 37.0
+ },
+ "evo_barbarians": {
+  "lifetime_s": 3.8,
+  "seen": 60,
+  "speed_px": 51
+ },
+ "goblin_gang": {
+  "lifetime_s": 16.7,
+  "seen": 1,
+  "speed_px": null
+ },
+ "miner": {
+  "lifetime_s": 5.2,
+  "seen": 7,
+  "speed_px": 42.0
+ },
+ "musketeer": {
+  "lifetime_s": 8.8,
+  "seen": 7,
+  "speed_px": 54.0
+ },
+ "spear_goblins": {
+  "lifetime_s": 4.0,
+  "seen": 10,
+  "speed_px": 40.5
+ },
+ "valkyrie": {
+  "lifetime_s": 10.5,
+  "seen": 1,
+  "speed_px": null
+ }
+}
