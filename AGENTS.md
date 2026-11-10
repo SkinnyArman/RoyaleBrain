@@ -77,6 +77,12 @@ Target shape of every decision:
   to others (a test checks Ram+Wizard ~ Hog+Witch). No per-card or per-combination features,
   rules or labels; the feature count must not grow with the number of cards.
 
+## Current plan (2026-11-10)
+
+See docs/roadmap.md. Next: benchmark (B), simulator core (S1), replay extraction + sim-vs-replay
+check (S2). The rule brain is frozen (bug fixes only). Simulator rule: no mechanic or card is used
+for training before it matches recorded replays.
+
 ## Rules for agents
 
 1. **Knowledge lives in files, not in your head.** Whatever you learn (a measured coordinate, a

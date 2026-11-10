@@ -309,3 +309,11 @@ no labels from it.
   others 0.77; an exact hash broke when "Watched" greyed the entry). Data -> datasets/tv/<ts>/.
   Extraction of both sides' plays (tools.tv_extract) is the next step.
 81 offline tests.
+
+## #18  2026-11-10  Direction: simulator + RL, validated against TV Royale replays
+
+Owner asked whether to drop TV Royale and build a simulator (after a GPT outline: perception,
+state, decisions, RL in a simulator, execution). Decision: build the simulator (RL needs millions of
+games; the real game gives ~20/hour), keep recording TV Royale (ground truth to validate the sim,
+and data to start the policy from), freeze the rule brain as the baseline, add a fixed benchmark.
+Roadmap rewritten (phases B, S1-S6).
