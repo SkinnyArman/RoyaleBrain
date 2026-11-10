@@ -40,7 +40,11 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # once
 
 Card data lives in `data/`: `cards_api.json` (official catalog: refresh with
 `CR_API_TOKEN=... .venv/bin/python -m tools.fetch_catalog`; never commit a token), `card_stats.json`
-(base stats), `profiles_learned.json` (written by train_policy from our matches).
+(base stats; from cr-api-data, last updated 2023, stale), `profiles_learned.json` (written by
+train_policy from our matches), `card_levels.json` (every catalog card's full game record + all stats at
+levels 11-16, incl. spawned units, evolutions, hero forms; decoded from the game client by RoyaleSim,
+MIT: download its sdist from PyPI and run `.venv/bin/python -m tools.build_card_levels
+<sdist>/data/derived/cards-<newest>.json`; checked against statsroyale in tests/test_card_levels.py).
 
 Growing the enemy recogniser: after a match, look at `runs/<id>/enemy_units/*.png`, copy clear
 crops into `datasets/enemy_units/<card_name>/` (names = keys in `bot/cards.py`), then run
