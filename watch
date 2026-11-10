@@ -4,7 +4,7 @@
 #   ./watch 3        watch 3 matches
 # For every match: your plays (card + spot) are logged as training data with their outcomes,
 # with a snapshot of each detected play in runs/<id>/human_plays/ to check the detection.
-# At the end: retrain on everything, then a report of what was learned.
+# At the end: true results + decks from the battle log, then a report.
 cd "$(dirname "$0")" || exit 1
 n=${1:-5}
 stop=0
@@ -24,6 +24,4 @@ done
 trap - INT
 echo; echo "fetching the battle log (true results + both decks)..."
 .venv/bin/python -m tools.battlelog 2>&1 | grep -v "objc\["
-echo; echo "retraining on all matches..."
-.venv/bin/python -m tools.train_policy 2>&1 | grep -v "objc\["
 echo; .venv/bin/python -m tools.report --since "$first_run" 2>&1 | grep -v "objc\["

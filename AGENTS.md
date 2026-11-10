@@ -22,29 +22,23 @@ half-working builds never spoil real players' matches.
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # once
 .venv/bin/python -m tools.grab --cards      # screenshot + hand-slot crops into shots/
-./play                                      # wait for a match, play it, stop when it ends, retrain
-./play --explore 0.15                       # practice: try alternative moves sometimes (learning data)
-./watch 5                                   # watch the OWNER play 5 real matches (never taps), learn, report
-./note 106 bad                              # owner verdict on a moment of the latest match -> label
-./tvroyale 10                               # from the main page: record 10 TV Royale replays (both sides)
-.venv/bin/python -m tools.battlelog         # true results + both decks for recent runs (needs .env)
-.venv/bin/python -m tools.backfill runs/<id>  # re-detect owner plays / re-read towers after a fix
-.venv/bin/python -m tools.label_run runs/<id> --single   # label enemy crops against the real deck
-.venv/bin/python -m tools.report --since <run>   # what happened + what the data says
-.venv/bin/python -m tools.train_policy      # retrain the learned scorer on all matches by hand
+./play                                      # wait for a match, play it with the rule brain (baseline), stop at the end
 ./play --dry-run                            # same, but never tap (watch + log only)
 ./play --tower-hp 4032                      # optional match info
+./watch 5                                   # watch the OWNER play 5 real matches (never taps), battle log, report
+./tvroyale 10                               # from the main page: record 10 TV Royale replays (both sides)
+.venv/bin/python -m tools.battlelog         # true results + both decks for recent runs (needs .env)
+.venv/bin/python -m tools.label_run runs/<id> --single   # label enemy crops against the real deck
+.venv/bin/python -m tools.report --since <run>   # results per match
 .venv/bin/python -m pytest -q               # tests (offline, saved frames); needs `pip install pytest`
 # without pytest: .venv/bin/python -c "import tests.test_offline as t; [getattr(t,n)() for n in dir(t) if n.startswith('test_')]"
 ```
 
 Card data lives in `data/`: `cards_api.json` (official catalog: refresh with
-`CR_API_TOKEN=... .venv/bin/python -m tools.fetch_catalog`; never commit a token), `card_stats.json`
-(base stats; from cr-api-data, last updated 2023, stale), `profiles_learned.json` (written by
-train_policy from our matches), `card_levels.json` (every catalog card's full game record + all stats at
+`CR_API_TOKEN=... .venv/bin/python -m tools.fetch_catalog`; never commit a token), `card_levels.json` (every catalog card's full game record + all stats at
 levels 11-16, incl. spawned units, evolutions, hero forms; decoded from the game client by RoyaleSim,
 MIT: download its sdist from PyPI and run `.venv/bin/python -m tools.build_card_levels
-<sdist>/data/derived/cards-<newest>.json`; checked against statsroyale in tests/test_card_levels.py).
+<sdist>/data/derived/cards-<newest>.json`; checked against statsroyale in tests/test_card_levels.py). `bot/profiles.py` reads it.
 
 Growing the enemy recogniser: after a match, look at `runs/<id>/enemy_units/*.png`, copy clear
 crops into `datasets/enemy_units/<card_name>/` (names = keys in `bot/cards.py`), then run
@@ -53,39 +47,32 @@ crops into `datasets/enemy_units/<card_name>/` (names = keys in `bot/cards.py`),
 The phone must show up in `adb devices`. Device: Galaxy S20 FE, 1080x2400. All coordinates are
 in that resolution; another phone needs recalibration (see docs/calibration.md).
 
-## Direction (owner, 2026-11-09): a learning system, not an if/else script
+## Direction (owner, 2026-11-09, updated 2026-11-10): a learning system, not an if/else script
 
-The bot must make data-driven decisions and keep improving from data, using information humans
-can't track while playing (exact elixir and cycle, HP, ETAs, statistics over many exchanges).
-Target shape of every decision:
+The bot must make data-driven decisions using information humans can't track while playing (exact
+elixir and cycle, HP, ETAs, statistics over many games).
 
-    state -> candidate actions (card x placement grid, plus "wait") -> score each -> play the best
-    and log state + all candidates + choice + later outcome as training data.
-
-- Hand-written rules are priors, features and safety limits, never the final architecture.
-- Learned scorers replace rules where measured results (win rate, elixir trade, tower damage per
-  exchange) show they are better, via A/B in practice matches.
-- Data sources: our own logged matches (outcomes), recorded human replays (Battle Log "Watch",
-  TV Royale) for imitation, the owner's knowledge as priors.
-- **The model learns what WORKS, not who played it.** Every logged move (bot, explored, owner) is
-  labelled only by its outcome; training predicts "how good is this move in this state" and the bot
-  plays the best. Owner matches are extra (state, move, outcome) samples, good or bad, never targets
-  to copy. No imitation loss, no "owner did X" features.
-- **Features are open-ended.** Logs keep raw State + frames, so a new parameter can be added later
-  and computed back over old matches; retrain after any feature change (a model trained on another
-  feature list is refused at load and the bot falls back to rules).
-- No RL from scratch: ~20 matches/hour and no simulator. Imitation + outcome learning + priors.
+- **Perception + execution are ours** (screen -> State -> taps). **Decisions will come from a policy
+  trained offline**: imitation from public pro replays (VanguardX101/IL_Replay on Hugging Face:
+  252k replays, every play with side, card, tick and exact tile), then self-play RL in RoyaleSim
+  (MIT Clash Royale battle engine, measured against the real client). Both still to be verified
+  locally before we build on them (docs/roadmap.md).
+- **The policy learns what WINS, not who played it.** Replay plays are weighted by outcome; the
+  owner's own matches are never targets to copy.
+- **Train on what the phone can see.** The policy's inputs must be what live perception provides
+  (enemy card names often unknown, their elixir estimated), not the simulator's perfect state.
 - **Cards are numbers, never names, inside the model** (owner: "I can't give you every variation";
-  there are 120+ cards). Every card enters as its profile (cost, HP, DPS, range, splash, targets,
-  spell damage...), and groups of units as profile totals. Patterns learned on one card must transfer
-  to others (a test checks Ram+Wizard ~ Hog+Witch). No per-card or per-combination features,
-  rules or labels; the feature count must not grow with the number of cards.
+  there are 120+ cards). Every card enters as its stats; patterns must transfer between cards and the
+  input size must not grow with the number of cards.
+- The rule brain (`bot/brain.py`) is frozen: it is the live baseline and the benchmark opponent.
+- Removed 2026-11-10 as obsolete: the outcome scorer trained on our own matches (features.py,
+  outcomes.py, placements.py, train_policy.py, BlendPolicy, backfill, ./note) and the old
+  cr-api-data stats. Rationale in docs/experiments.md #20.
 
 ## Current plan (2026-11-10)
 
-See docs/roadmap.md. Next: benchmark (B), simulator core (S1), replay extraction + sim-vs-replay
-check (S2). The rule brain is frozen (bug fixes only). Simulator rule: no mechanic or card is used
-for training before it matches recorded replays.
+See docs/roadmap.md. Next: verify RoyaleSim (our deck loads, speed, one of our recorded matches
+replayed) and the IL_Replay data, then benchmark (B), replay -> simulator pipeline, imitation, RL.
 
 ## Rules for agents
 

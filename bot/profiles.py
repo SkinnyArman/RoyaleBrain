@@ -2,13 +2,11 @@
 generalises to cards it has never fought (owner: "the model should develop a profile for each troop").
 
 Sources, in order:
-  data/cards_api.json      official catalog (names, elixir, rarity, evo/hero) - api.clashroyale.com
-  data/card_stats.json     base stats (RoyaleAPI cr-api-data; may lag balance patches)
-  data/profiles_learned.json   what we measured ourselves across matches (speed, lifetime, seen count)
+  data/card_levels.json    game stats per level (11-16) for every card, its evo and hero forms; decoded
+                           from the game client (tools/build_card_levels.py)
   bot/cards.py             hand-written traits (splash, sturdy, charge...) and owner knowledge
 
-Level scaling is approximate: +10% per level above the rarity's starting level (unverified; the
-real table differs by a few %). Our levels come from the owner's Battle Log; enemy level from towers.
+Our levels come from the owner's Battle Log; enemy level from towers.
 """
 import json
 from functools import lru_cache
@@ -18,84 +16,99 @@ from .cards import CARDS
 
 DATA = Path(__file__).resolve().parent.parent / "data"
 TILE = 54.0
-START_LEVEL = {"common": 1, "rare": 3, "epic": 6, "legendary": 9, "champion": 11}
 OUR_LEVELS = {"witch": 14, "golden_knight": 13, "ram": 13, "poison": 11, "log": 13, "tombstone": 13,
               "hog": 12, "minions": 13}          # owner's Battle Log, 2026-11-08
 ENEMY_LEVEL = 14                                 # practice vs Devil (level-14 towers); per match later
-
-# our card keys -> official names / stats unit names, where a simple transform doesn't work
-API_NAME = {"hog": "Hog Rider", "ram": "Battle Ram", "log": "The Log", "evo_barbarians": "Barbarians",
-            "hero_wizard": "Wizard", "mini_pekka": "Mini P.E.K.K.A", "pekka": "P.E.K.K.A"}
-UNIT_NAME = {"hog": "HogRider", "ram": "BattleRam", "minions": "Minion", "spear_goblins": "SpearGoblin",
-             "evo_barbarians": "Barbarian", "barbarians": "Barbarian", "hero_wizard": "Wizard",
-             "goblins": "Goblin", "goblin_gang": "Goblin", "skeleton_army": "Skeleton", "bats": "Bat",
-             "minion_horde": "Minion", "mini_pekka": "MiniPekka", "pekka": "Pekka", "golem": "Golem",
-             "goblin_barrel": "Goblin", "ram_rider": "Ram", "dart_goblin": "BlowdartGoblin",
-             "sparky": "ZapMachine", "elite_barbarians": "AngryBarbarian"}
-UNIT_COUNT = {"barbarians": 5, "evo_barbarians": 5, "spear_goblins": 3, "minions": 3, "minion_horde": 6,
-              "goblin_gang": 6, "goblins": 3, "skeleton_army": 15, "bats": 5, "goblin_barrel": 3, "elite_barbarians": 2}
-
-# spells at OUR level (unverified, from base stats scaled): total damage to troops, crown-tower factor
-SPELLS = {
-    "poison": {"radius_px": 3.5 * TILE, "damage": 57 * 8 * 1.1 ** (11 - 6), "tower_factor": 0.3},
-    "log": {"width_px": 3.9 * TILE, "length_px": 10.1 * TILE, "damage": 240 * 1.1 ** (13 - 9), "tower_factor": 0.2},
-}
+ALIAS = {"hog": "hog_rider", "ram": "battle_ram"}   # our card keys -> card_levels.json keys
+FORMS = (("evo_", "evolution"), ("hero_", "hero"))
 
 
 @lru_cache(maxsize=1)
-def _api():
-    p = DATA / "cards_api.json"
-    return {c["name"]: c for c in json.loads(p.read_text())["cards"]} if p.exists() else {}
+def _cards():
+    cards = json.loads((DATA / "card_levels.json").read_text())["cards"]
+    return {c["key"]: c for c in cards.values()}
 
 
-@lru_cache(maxsize=1)
-def _stats():
-    p = DATA / "card_stats.json"
-    return json.loads(p.read_text())["units"] if p.exists() else {}
+def _entry(card):
+    """card_levels.json entry for one of our card keys; evo_ / hero_ keys get that form's numbers."""
+    form = None
+    for prefix, section in FORMS:
+        if card.startswith(prefix):
+            card, form = card.removeprefix(prefix), section
+    c = _cards().get(ALIAS.get(card, card))
+    if c is not None and form and c.get(form):
+        return next(iter(c[form].values()))
+    return c
 
 
-@lru_cache(maxsize=1)
-def _learned():
-    p = DATA / "profiles_learned.json"
-    return json.loads(p.read_text()) if p.exists() else {}
+def _stats(card, level):
+    """(unit record, its numbers at `level`, unit count) of the unit a card puts on the field.
+    Spells that drop units (Goblin Barrel) -> the dropped unit; damage spells -> (None, {}, 0)."""
+    e = _entry(card)
+    if e is None:
+        return None, {}, 0
+    rec = e["record"]
+    lv = e["levels"][str(min(16, max(11, level)))]
+    if "hitpoints" in rec:
+        count = rec.get("count", 1) + (rec.get("second_summon") or {}).get("count", 0)
+        return rec, lv, count
+    for name, unit in e.get("units", {}).items():
+        drop = rec.get("projectile") or {}
+        count = drop.get("spawn_character_count") if drop.get("spawn_character") == name else None
+        return unit, {k.removeprefix(f"units.{name}."): v for k, v in lv.items()}, count or 1
+    return None, {}, 0
 
 
-def _unit_name(card):
-    if card in UNIT_NAME:
-        return UNIT_NAME[card]
-    camel = "".join(w.capitalize() for w in card.split("_"))
-    return camel if camel in _stats() else camel.rstrip("s")
+def _spells():
+    """Our spells at OUR level: total damage to troops, crown-tower factor, area."""
+    poison, log = _entry("poison"), _entry("log")
+    aoe = poison["record"]["spell"]["area_effect_object"]
+    p = poison["levels"][str(OUR_LEVELS["poison"])]
+    hit = p["spell.area_effect_object.buff.damage_per_hit"]
+    rolling = log["record"]["projectile"]["spawn_projectile"]
+    lg = log["levels"][str(OUR_LEVELS["log"])]
+    return {
+        "poison": {"radius_px": aoe["radius_milli"] / 1000 * TILE,
+                   "damage": hit * (aoe["life_duration_ms"] // aoe["buff"]["hit_frequency_ms"]),
+                   "tower_factor": p["spell.area_effect_object.buff.crown_tower_damage_per_hit"] / hit},
+        "log": {"width_px": 2 * rolling["projectile_radius_milli"] / 1000 * TILE,
+                "length_px": rolling["projectile_range_milli"] / 1000 * TILE,
+                "damage": lg["damage"], "tower_factor": lg["crown_tower_damage"] / lg["damage"]},
+    }
+
+
+SPELLS = _spells()
 
 
 def profile(card, level=None, ours=False):
     """Numbers for one card. Unknown card -> generic mid-size troop."""
-    if card and card.startswith("evo_") and card not in UNIT_NAME:
-        card = card.removeprefix("evo_")           # an evolution has its base card's stats (approx.)
     if card is None:
         return dict(big_shot=0.0, card=None, cost=3.5, count=1, hp=900.0, dps=150.0, range_px=1.2 * TILE,
                     speed_px=1.0 * TILE, splash_px=0.0, hits_air=True, buildings=False, known=False)
-    api = _api().get(API_NAME.get(card, card.replace("_", " ").title()), {})
-    unit = _stats().get(_unit_name(card), {})
-    rarity = api.get("rarity") or unit.get("rarity", "common").lower()
+    entry = _entry(card)
     level = level or (OUR_LEVELS.get(card, 13) if ours else ENEMY_LEVEL)
-    scale = 1.1 ** max(0, level - START_LEVEL.get(rarity.lower(), 1))
-    hit_speed = unit.get("hit_speed", 1000) / 1000.0
+    unit, lv, count = _stats(card, level)
+    unit = unit or {}
     trait = CARDS.get(card, {})
-    learned = _learned().get(card, {})
+    dps = lv.get("dps")
+    if dps is None and unit.get("hit_speed_ms"):   # damage only on a nested projectile (Firecracker)
+        dmg = next((v for k, v in lv.items() if k.startswith("projectile.") and k.endswith(".damage")), None)
+        dps = dmg * 1000 / unit["hit_speed_ms"] if dmg else None
     shot = trait.get("big_shot")                   # e.g. Sparky: one charged hit every few seconds
+    elixir = (entry or {}).get("record", {}).get("elixir")
     return dict(
-        big_shot=float(shot or 0.0),
+        big_shot=float(lv.get("damage", shot) if shot else 0.0),
         card=card,
-        cost=float(api.get("elixirCost", trait.get("cost", 3.5))),
-        count=UNIT_COUNT.get(card, unit.get("summon_number", 1) or 1),
-        hp=float(unit.get("hitpoints", 900)) * scale,
-        dps=(float(shot) * scale / 4.0 if shot else float(unit.get("damage", 150)) * scale / max(hit_speed, 0.3)),
-        range_px=unit.get("range", 1200) / 1000.0 * TILE,
-        speed_px=learned.get("speed_px") or unit.get("speed", 60) / 60.0 * TILE,
-        splash_px=unit.get("area_damage_radius", 0) / 1000.0 * TILE or (1.5 * TILE if trait.get("splash") else 0.0),
+        cost=float(elixir if elixir is not None else trait.get("cost", 3.5)),
+        count=count or 1,
+        hp=float(lv.get("hitpoints", 0 if entry else 900)),
+        dps=float(dps if dps is not None else (0 if entry else 150)),
+        range_px=unit.get("range_milli", 0) / 1000.0 * TILE,
+        speed_px=unit.get("speed", 60) / 60.0 * TILE,
+        splash_px=unit.get("area_damage_radius_milli", 0) / 1000.0 * TILE or (1.5 * TILE if trait.get("splash") else 0.0),
         hits_air=bool(unit.get("attacks_air", trait.get("hits_air", False))),
         buildings=bool(unit.get("target_only_buildings", trait.get("buildings", False))),
-        known=bool(unit) or bool(trait),
+        known=entry is not None or bool(trait),
     )
 
 

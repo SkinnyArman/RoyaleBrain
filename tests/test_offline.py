@@ -16,7 +16,6 @@ from bot.tracker import OwnDeploys, Tracker
 
 FRAME = Path(__file__).resolve().parent.parent / "calib" / "battle_7elixir.png"      # 2v2, full-res
 FRAMES = Path(__file__).resolve().parent / "frames"
-ROOT_DIR = Path(__file__).resolve().parent.parent
 
 
 def frame_1v1(name):
@@ -479,48 +478,7 @@ def test_evo_ram_counted_and_saved_for_attack():
     b.note_played("ram"); assert not b.evo_ready("ram")    # the evolved one was used
 
 
-# ---- step 2: features, outcome labels, blended policy ----
-
-def test_feature_vector_matches_names():
-    from bot.actions import Action
-    from bot.features import FEATURES, encode
-    s = _state().to_dict()
-    for a in (Action("wait"), Action("ability", "gk_ability"), Action("play", "log", 1, 300, 900)):
-        assert len(encode(s, a.to_dict())) == len(FEATURES)
-
-
-def test_outcome_label_is_tower_damage_not_elixir_spent():
-    from bot.outcomes import ENEMY_TOWER_HP, OUR_TOWER_HP, label, tower_series
-    log = [{"t": 0, "towers": {"enemy_left": 1.0, "enemy_right": 1.0, "our_left": 1.0, "our_right": 1.0}},
-           {"t": 5, "towers": {"enemy_left": 0.9, "our_left": None}},          # None = keep last value
-           {"t": 10, "towers": {"enemy_left": 0.8, "our_right": 0.95}}]
-    series = tower_series(log)
-    hog = {"state": {"t": 0}, "action": {"kind": "play", "card": "hog"}}
-    wait = {"state": {"t": 0}, "action": {"kind": "wait", "card": None}}
-    expected = (0.2 * ENEMY_TOWER_HP - 0.05 * OUR_TOWER_HP) / 1000
-    assert abs(label(hog, series) - expected) < 1e-6 and label(wait, series) == label(hog, series)
-
-def _blend(beta=None, explore=0.0, seed=1):
-    import json as _json
-    import random
-    from bot.policy import BlendPolicy
-    bp = BlendPolicy(Brain(), ROOT_DIR / "models" / "q_lgbm.txt",
-                     _json.loads((ROOT_DIR / "models" / "q_meta.json").read_text()),
-                     explore=explore, rng=random.Random(seed))
-    if beta is not None:
-        bp.beta = beta
-    return bp
-
-
-def test_blend_with_no_weight_follows_the_rules():
-    from bot.actions import snap
-    from bot.policy import Context
-    tracks = tracked([(300, 1250, 40, 1.0)])
-    hand = ["witch", "tombstone", "poison", "ram"]
-    expected = Brain().decide(7, hand, tracks, now=0)
-    chosen, cands, _ = _blend(beta=0.0).choose(_state(elixir=7, hand=hand), Context(tracks=tracks, now=0))
-    assert chosen == snap(expected[0], expected[1], expected[2]) and len(cands) > 3
-
+# ---- prediction, spells, support pushes ----
 
 def test_prediction_follows_the_lane_to_the_bridge():
     # a unit at their left side walking diagonally toward the bridge (run 010052 Barbarians)
@@ -664,43 +622,6 @@ def test_attack_prepares_for_their_usual_swarm_answer():
     assert poor._attack_ready("hog", 5.0, {"hog": 0, "log": 1}) == (False, None)   # can't afford both
 
 
-def test_features_match_names():
-    from bot.actions import Action
-    from bot.features import FEATURES, encode
-    s = _state().to_dict()
-    for a in (Action("wait"), Action("play", "poison", 1, 300, 900)):
-        assert len(encode(s, a.to_dict())) == len(FEATURES)
-
-
-
-def test_exploration_rolls_once_per_move_and_never_spells():
-    from bot.policy import Context
-    tracks = tracked([(300, 1250, 40, 1.0)])
-    hand = ["witch", "tombstone", "poison", "log"]
-    explored = 0
-    bp = _blend(beta=0.0, explore=1.0, seed=1)               # explore every time it may
-    for i in range(50):                                     # 50 frames ~ 1 second
-        bp.brain = bp.rule.brain = Brain()
-        chosen, cands, _ = bp.choose(_state(elixir=9, hand=hand), Context(tracks=tracks, now=i * 0.02))
-        explored += bp.last_explored
-        assert not (chosen.kind == "play" and chosen.card in ("poison", "log") and bp.last_explored)
-    assert explored == 1                                    # one roll, then the 10s cooldown
-
-
-def test_override_leaves_no_rule_bookkeeping_behind():
-    from bot.policy import Context
-    tracks = tracked([(300, 1250, 40, 1.0)])
-    hand = ["witch", "tombstone", "minions", "ram"]
-    bp = _blend(beta=0.0, explore=1.0, seed=3)
-    chosen, _, _ = bp.choose(_state(elixir=7, hand=hand), Context(tracks=tracks, now=0))
-    rule = bp.rule._rule_action(_state(elixir=7, hand=hand), Context(tracks=tracks, now=0))[0]
-    assert bp.last_explored and chosen != rule
-    assert bp.brain.last_defend["left"] == float("-inf")     # rules' proposal undone
-    assert bp.brain.last_action == 0                        # the explored move was committed
-
-
-# ---- watching the owner: play detection + notes ----
-
 def _frame_with_drop(xy=None):
     img = np.full((2400, 1080, 3), (60, 140, 70), np.uint8)       # grass
     if xy:
@@ -737,44 +658,6 @@ def test_hand_flicker_is_not_a_play():
         h = ["minions", "log", "witch", "tombstone"] if i == 10 else hand   # one-frame misread
         out += det.update(i * 0.02, _frame_with_drop(), h, 8.0, _state())
     assert out == []
-
-
-def test_owner_note_overrides_label():
-    import tempfile
-    from bot.outcomes import apply_notes
-    d = Path(tempfile.mkdtemp())
-    (d / "notes.jsonl").write_text(json.dumps({"t": 106, "verdict": "bad", "text": "poison on the edge"}) + "\n")
-    decisions = [{"state": {"t": 105.5}, "action": {"kind": "play", "card": "poison"}},
-                 {"state": {"t": 105.5}, "action": {"kind": "wait", "card": None}},
-                 {"state": {"t": 120}, "action": {"kind": "play", "card": "log"}}]
-    assert apply_notes(d, decisions, [0.3, 0.1, 0.2]) == [-1.5, 0.1, 0.2]
-
-
-def test_moves_are_numbers_so_patterns_transfer_between_cards():
-    """Owner: 'I can't give you every variation'. Ram in front of our Wizard must look like Hog in
-    front of our Witch (both: building-targeter + ranged splash support behind), not like Hog alone."""
-    from bot.features import ACTION_FEATURES, action_features
-    def move(card, support):
-        s = _state(our_units=[[support, 240, 1450]] if support else []).to_dict()
-        return np.array(action_features(s, {"kind": "play", "card": card, "slot": 0, "x": 240, "y": 1150}))
-    hog_witch, ram_wiz, hog_alone = move("hog", "witch"), move("ram", "hero_wizard"), move("hog", None)
-    assert np.linalg.norm(hog_witch - ram_wiz) < np.linalg.norm(hog_witch - hog_alone)
-    assert not any(name.startswith("act_hog") or name.startswith("hand_hog") for name in ACTION_FEATURES)
-
-
-def test_model_cannot_veto_a_move_at_full_elixir():
-    """Run 055851: the blended model chose WAIT for 54s at 9-10 elixir in Training Camp."""
-    from bot.policy import Context
-    bp = _blend(beta=50.0)                                    # even a model that massively prefers waiting
-    chosen, _, _ = bp.choose(_state(elixir=9.6, hand=["hog", "golden_knight", "log", "witch"]), Context(now=0))
-    assert chosen.kind == "play"
-
-
-def test_waiting_at_full_bar_is_penalised():
-    from bot.outcomes import label, leak_fn, tower_series
-    log = [{"t": t / 10, "elixir": 10.0, "regen": 0.357, "towers": {}} for t in range(101)]
-    wait = {"state": {"t": 0}, "action": {"kind": "wait", "card": None}}
-    assert label(wait, tower_series(log), 10.0, leak_fn(log)) < -0.2       # ~3.6 elixir wasted
 
 
 def test_goblin_barrel_drop_gets_the_log():

@@ -25,7 +25,7 @@ from .economy import UNKNOWN_COST
 from .recognizer import Recognizer
 from .actions import Action
 from .observer import HumanPlayDetector, coverage
-from .policy import BlendPolicy, Context, DecisionLog, RulePolicy
+from .policy import Context, DecisionLog, RulePolicy
 from .state import build_state
 from . import tracker as tracker_mod
 from .tracker import OwnDeploys, Tracker
@@ -40,16 +40,9 @@ ROOT = Path(__file__).resolve().parent.parent     # no in-match screen for this 
 
 
 def make_policy(args, brain):
-    model, meta = ROOT / "models" / "q_lgbm.txt", ROOT / "models" / "q_meta.json"
-    if args.policy == "rules" or (args.policy == "auto" and not model.exists()):
-        return RulePolicy(brain)
-    info = json.loads(meta.read_text())
-    from .features import FEATURES
-    if info.get("features") != FEATURES:
-        # features were added/changed since training: an old model would read the wrong columns
-        print("model was trained on a different feature set: using rules (run tools.train_policy)")
-        return RulePolicy(brain)
-    return BlendPolicy(brain, model, info, explore=args.explore)
+    """The rule brain: the live baseline until a replay/simulator-trained policy replaces it
+    (docs/roadmap.md). The old outcome-scorer blend was removed 2026-11-10."""
+    return RulePolicy(brain)
 
 
 def phone_serial():
@@ -70,10 +63,6 @@ def main():
     ap.add_argument("--verbose", action="store_true", help="print every frame, not just plays")
     ap.add_argument("--tower-hp", type=int, help="princess tower max HP for this match (read it off the screen)")
     ap.add_argument("--enemy-deck", default="", help="comma-separated enemy cards we already know")
-    ap.add_argument("--policy", choices=["auto", "rules", "blend"], default="auto",
-                    help="auto = blend when models/q_lgbm.txt exists, else rules")
-    ap.add_argument("--explore", type=float, default=0.0,
-                    help="practice only: chance of trying an alternative move (e.g. 0.15) to learn from")
     ap.add_argument("--observe", action="store_true",
                     help="watch the owner play: never tap, log their plays as training data")
     ap.add_argument("--frames", help="replay a recorded run's frames offline instead of the phone")
@@ -111,7 +100,7 @@ def main():
     policy = make_policy(args, brain)
     watcher = HumanPlayDetector()          # observe: logs the owner's plays; else: shadow self-check
     shadow = open(rec.dir / "shadow.jsonl", "a") if not args.observe else None
-    print(f"policy: {policy.name}" + (f" (beta {policy.beta:.2f}, explore {args.explore})" if policy.name == "blend" else ""))
+    print(f"policy: {policy.name}")
     decisions = DecisionLog(rec.dir)
     recognizer = Recognizer()
     print(f"enemy recogniser: {len(recognizer.y)} labelled examples")

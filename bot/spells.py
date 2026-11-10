@@ -15,7 +15,7 @@ import math
 from . import layout as L
 from .profiles import SPELLS, profile, remaining_hp, unit_value
 
-ELIXIR_HP = 80.0            # 1 elixir ~ 80 tower HP (prior, same as outcomes.py)
+ELIXIR_HP = 80.0            # 1 elixir ~ 80 tower HP (prior)
 PARTIAL = 0.35              # value of damage that doesn't kill, relative to a kill
 SUPPORT_REACH_PX = 5 * 54   # our troops this close add their damage over the next few seconds
 SUPPORT_EXTRA_DMG = 350.0   # damage one nearby troop of ours adds before the unit escapes (unverified)

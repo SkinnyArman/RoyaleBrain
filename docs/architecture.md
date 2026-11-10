@@ -24,8 +24,8 @@ frame -> vision/trackers -> State (bot/state.py, serializable)
                              |
                              v
         Policy.score(State, candidates) -> choose best (bot/policy.py)
-            RulePolicy  = the rule brain as scores (prior / baseline)        <- now
-            Learned     = model trained on logged outcomes + human replays   <- next
+            RulePolicy  = the rule brain (live baseline)                         <- now
+            Trained     = imitation on pro replays + RL in RoyaleSim         <- planned (roadmap)
                              |
                              v
         execute + DecisionLog: runs/<id>/decisions.jsonl (State + action + policy per decision point)
@@ -40,20 +40,12 @@ frame -> vision/trackers -> State (bot/state.py, serializable)
   the clock; output in runs/replays/). It checks the pipeline; it can't evaluate a policy, because the
   recorded frames don't react to the bot's moves.
 
-## Learning loop (step 2, 2026-11-09)
+## Removed 2026-11-10
 
-- `bot/outcomes.py`: every logged decision gets a reward = (enemy tower HP lost - ours lost over the
-  next 10s) - 80 HP per elixir spent (prior). From log.jsonl, no extra input.
-- `bot/features.py`: (state, action) -> 51 numbers; same encoding for training and live.
-- `tools/train_policy.py`: trains a LightGBM regressor on all real matches (not replays), checks it
-  leave-one-match-out (rank correlation), prints mean outcome per move, saves models/q_lgbm.txt.
-  `./play` runs it automatically after every real match.
-- `BlendPolicy`: shortlist (WAIT, rule move, its 8 neighbouring cells, other cards on its cell),
-  score = rule prior + beta * z(learned Q). beta = 1.5 * min(1, trained plays / 400), so the model
-  earns weight with data. `--explore 0.15` (practice) plays a random shortlist move 15% of the time:
-  counterfactual data. The brain proposes with snapshot/restore so overrides leave no stale state.
-- Learned scoring costs ~0.2ms per decision. The model can't start plays on its own yet (only
-  re-rank around the rule move, or wait); that opens up once beta is high.
+The outcome scorer trained on our own matches (`features.py`, `outcomes.py`, `placements.py`,
+`tools/train_policy.py`, `BlendPolicy`, `tools/backfill.py`, `./note`) and the old cr-api-data stats
+were removed: a few hundred self-played moves can't train a decision model, and pro replays + a
+simulator replace them (docs/experiments.md #20; git history has the code).
 
 ## Modules (bot/)
 
@@ -69,10 +61,8 @@ frame -> vision/trackers -> State (bot/state.py, serializable)
 | `state.py` | `State`/`Unit`: the serializable snapshot every policy gets and every decision logs. |
 | `actions.py` | Fixed action space: WAIT, ability, card x grid cell; `snap` maps any placement to a cell. |
 | `policy.py` | `Policy` (score candidates, choose best), `RulePolicy` (rules as scores), `DecisionLog`. |
-| `profiles.py` | Troop profiles: HP/DPS/range/speed/splash/count per card at the right level, from `data/cards_api.json` (official catalog), `data/card_stats.json` (base stats) and `data/profiles_learned.json` (measured by us). |
+| `profiles.py` | Troop profiles: HP/DPS/range/speed/splash/count per card at the right level, from `data/card_levels.json` (game stats at levels 11-16, incl. evo and hero forms). Our spells' damage, area and tower factor come from the same file. |
 | `spells.py` | Log/Poison value in elixir (kills incl. units our troops will finish, chip, tower damage) and the best cast spot. Spells are cast only when worth their cost. |
-| `features.py` | (state, action) feature vector for learned scorers. |
-| `outcomes.py` | Reward label for each logged decision from tower HP over the next 10s and elixir cost. |
 | `observer.py` | Watch mode: detects the owner's plays (card leaves the hand + elixir drop; spot = the pink cost drop + offset) and logs them as `policy: human` decisions. Runs in shadow during bot matches (`shadow.jsonl`) to measure its own accuracy. |
 | `framedevice.py` | Offline replay of a run's frames (`--frames`). |
 | `opponent.py` | Opponent model: known cards, play order (cycle), spells possibly in hand, spell-safe placement. |
@@ -125,8 +115,6 @@ heat budget. Port once the logic is stable.
   seen once damaged; the Golden Knight's position falls back to dead reckoning.
 - Enemy card recognition is a bootstrap (32 labelled crops, one deck): it names about half the
   units and stays silent on the rest. Splash/charge rules only fire for named units.
-- Boss Bandit and other newer cards are missing from the base-stats dataset: generic profile until
-  measured (data/profiles_learned.json).
 - Enemy units standing right next to their own princess towers are masked out (tower decorations
   gave false badges).
 - Static decorations are only filtered after 8s; in the first seconds they can show up as units.

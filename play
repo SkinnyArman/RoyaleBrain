@@ -1,9 +1,6 @@
 #!/bin/bash
 # Start the bot: it waits for a match on the phone, plays it, and stops when the match ends.
-# After a real match it retrains the learned scorer on all matches so far (models/).
-#   ./play                    play the next match (rules + learned model blend when a model exists)
-#   ./play --explore 0.15     practice: sometimes try an alternative move, so the model learns more
-#   ./play --policy rules     rules only
+#   ./play                    play the next match (rule brain, the baseline)
 #   ./play --dry-run          watch and log only, never tap
 #   ./play --tower-hp 4032    enemy princess tower max HP (for the Poison/Log finish)
 # The opponent's deck is learned from what they play (no need to pass it).
@@ -11,11 +8,4 @@
 set -o pipefail
 cd "$(dirname "$0")" || exit 1
 .venv/bin/python -m bot.main "$@" 2>&1 | grep --line-buffered -v "objc\["
-status=$?
-if [ $status -ne 0 ]; then
-  exit $status                     # no phone, no match, crash or Ctrl+C: nothing new to learn from
-fi
-case " $* " in
-  *" --dry-run "*|*" --frames "*) ;;
-  *) echo; echo "retraining on all matches..."; .venv/bin/python -m tools.train_policy 2>&1 | grep -v "objc\[" ;;
-esac
+exit $?

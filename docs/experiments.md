@@ -317,3 +317,66 @@ state, decisions, RL in a simulator, execution). Decision: build the simulator (
 games; the real game gives ~20/hour), keep recording TV Royale (ground truth to validate the sim,
 and data to start the policy from), freeze the rule brain as the baseline, add a fixed benchmark.
 Roadmap rewritten (phases B, S1-S6).
+
+## #19  2026-11-10  Profiles from the game's own stats (data/card_levels.json)
+
+Question: the bot's numbers came from cr-api-data (last updated 2023) with a guessed +10%/level
+scaling, so are they wrong enough to matter? Setup: offline, every card in bot/cards.py, old vs new
+profile at enemy level 14. The new file is checked against statsroyale for 12 cards (exact).
+Results:
+- Most ranged troops had NO damage in the old file and fell back to a 150 default scaled up: Witch
+  dps 292 -> 162, Musketeer 428 -> 288, Minions 518 -> 118, Baby Dragon 214 -> 148, Bomber 288 -> 156,
+  Spear Goblins 305 -> 67 (hit speed is now 1.6s). Firecracker had none at all -> 28 (its explosion).
+- Other fixes: Skeleton Army hp 69 -> 108, Goblins are 4 per card (was 3), Boss Bandit hp 1198 -> 3474,
+  Lumberjack hp 1449 -> 1698 and range 1.2 -> 0.7 tiles, Executioner range 1.2 -> 4.5 tiles.
+- Evo Barbarians and Hero Wizard now use their own form's stats (were the base card's).
+- Damage spells get hp/dps 0 (were a 900/150 default troop). Unknown cards keep the default.
+- Our spells: Poison (lvl 11) 734 -> 736 total over 8s, tower factor 0.30 -> 0.22; Log (lvl 13)
+  351 -> 324, tower factor 0.20 -> 0.13. Areas unchanged (3.5 tiles radius; 3.9 x 10.1 tiles).
+- Sparky: dps 443 -> 440 from the data; big_shot is now its real hit (1762 at lvl 14).
+Retrained on the same 14 matches: held-out rank correlation 0.39 -> 0.38 overall, 0.33 -> 0.33 on
+plays (no change beyond noise). 83 offline tests pass.
+Decision: keep. Not yet measured in matches: run practice matches and compare to #17-#18 baselines.
+
+## #20  2026-11-10  RoyaleSim, IL_Replay, ClashAI found; obsolete learning code removed
+
+Found (owner): RoyaleSim (MIT Rust engine with Python bindings, rules measured against the real
+client, all 145 cards, ~16k battles/h/core; published parity: 56.5% of non-tower unit-ticks within a
+quarter tile, 79.5% exact HP), IL_Replay (252k Path of Legends replays, 17.8M plays with side, card,
+tick, exact tile; no license stated), ClashAI (same recipe for one deck; ~14k trophies, 33-48% in
+Ranked; no license). Read from their repos/data cards and a sample of the actions table; RoyaleSim
+not yet run locally (installing it was held for the owner's OK: it executes downloaded code).
+Decision: drop our own simulator (S1) and TV Royale extraction (S2); use RoyaleSim + IL_Replay after
+local verification. Removed as obsolete: the outcome scorer on our own matches (bot/features.py,
+bot/outcomes.py, bot/placements.py, tools/train_policy.py, BlendPolicy, tools/backfill.py, ./note,
+--policy/--explore, retraining in ./play and ./watch, outcome section of tools.report, LightGBM),
+data/card_stats.json (replaced by card_levels.json, #19), data/placements.json,
+data/profiles_learned.json (game data has real speeds). Kept: perception, trackers, rule brain
+(baseline), watch/tvroyale/battlelog/labelling, recogniser, cards_api.json. 73 offline tests pass.
+
+## #21  2026-11-10  RoyaleSim verified locally; open-loop replay of 292 pro matches; ClashAI read
+
+Setup: royalesim 0.1.51 in a throwaway venv (owner approved), Python 3.14, this Mac.
+- Our 8 cards load (engine names: Witch, BattleRam, GoldenKnight, HogRider, Poison, Log, Tombstone,
+  Minions); 145-card catalogue; levels, evo/hero forms and tower levels are reset() arguments.
+- Speed, one core: ~115k empty 3-min battles/h; ~75k/h with both sides playing (Python loop,
+  JSON state every second).
+- Coordinates: engine = 18,000 units/tile; IL_Replay native = 1,000/tile, same 18x32 frame, team =
+  blue = engine side 0 (low y). Engine x,y = native x,y * 18.
+- IL_Replay shard replays/part-000000 (5,000 replays, sha256 matches the manifest). Open-loop
+  replay (each recorded play injected at its tick and tile; deck ordered by first play; card waits
+  up to 3s for hand/elixir) on the first 300: 292 simulated (8 skipped: Flying Machine not mapped),
+  99% of 18,518 plays accepted, **winner agrees 60%, exact crowns 49%**.
+  Reading: plays line up mechanically, but whole matches diverge - the recorded taps were reactions
+  to the real board, so once the sim drifts they no longer fit. This measures chaos as much as
+  accuracy; RoyaleSim's per-tick parity (56.5% within 1/4 tile, 79.5% exact HP) is the better gauge.
+  Implication: train on short horizons from replay states (plays + value), not on full-match
+  open-loop outcomes.
+- ClashAI read (no license: ideas only). Pipeline: corpus replays driven through RoyaleSim ->
+  imitation dataset for both sides -> transformer (unit tokens + board patches + global token,
+  card-identity embeddings, pointer heads for card / cell / wait) -> PPO with KL leash to the
+  imitation model, league self-play, terminal reward, many opt-in shaping terms per deck (Rocket,
+  X-Bow, habits). Live: a 230-class detector (not in the repo), opponent hand belief and elixir
+  counter from public events, action delay + extrapolation modelled. Hardware: multi-GPU (cuda:0-3).
+  Has a decision-time rollout search (search_s0) as an experiment; not in its reported results.
+  Results: ~14k trophies (51.5% over 4,499), Ranked 33-48%.

@@ -1,12 +1,8 @@
 """What happened over a set of matches and what the data says. Run: python -m tools.report [--since RUN]"""
 import argparse
-import collections
 import json
 from pathlib import Path
 
-import numpy as np
-
-from bot.outcomes import run_dataset
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -20,7 +16,6 @@ def main():
     if not runs:
         raise SystemExit("no finished matches to report on")
     print(f"=== {len(runs)} match(es) ===")
-    by_policy = collections.defaultdict(lambda: collections.defaultdict(list))
     for run in runs:
         s = json.loads((run / "summary.json").read_text())
         t = s.get("towers") or {}
@@ -34,20 +29,6 @@ def main():
         if battle:
             print(f"    their deck: {', '.join(battle['them']['cards'])}")
         print(f"    their cards recognised: {', '.join(s.get('enemy_deck_seen') or []) or '(none)'}")
-        decisions, rewards = run_dataset(run)
-        for d, r in zip(decisions, rewards):
-            if d["action"]["kind"] != "wait":
-                by_policy[d["policy"]][d["action"]["card"] or "ability"].append(r)
-    print("\naverage outcome after each move, 10s window (tower HP dealt - taken - elixir, in 1000s):")
-    for pol, cards in by_policy.items():
-        print(f"  {pol}:")
-        for card, rs in sorted(cards.items(), key=lambda kv: -np.mean(kv[1])):
-            print(f"    {card:14s} n={len(rs):3d}  {np.mean(rs):+.2f}")
-    meta = ROOT / "models" / "q_meta.json"
-    if meta.exists():
-        m = json.loads(meta.read_text())
-        print(f"\nmodel: {m['n_plays']} plays from {len(m['runs'])} matches; held-out rank correlation "
-              f"{m.get('heldout_spearman_plays', float('nan')):+.2f} on plays (0 = no skill)")
 
 
 if __name__ == "__main__":
