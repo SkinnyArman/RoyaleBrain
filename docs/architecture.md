@@ -64,6 +64,7 @@ simulator replace them (docs/experiments.md #20; git history has the code).
 | `profiles.py` | Troop profiles: HP/DPS/range/speed/splash/count per card at the right level, from `data/card_levels.json` (game stats at levels 11-16, incl. evo and hero forms). Our spells' damage, area and tower factor come from the same file. |
 | `spells.py` | Log/Poison value in elixir (kills incl. units our troops will finish, chip, tower damage) and the best cast spot. Spells are cast only when worth their cost. |
 | `observer.py` | Watch mode: detects the owner's plays (card leaves the hand + elixir drop; spot = the pink cost drop + offset) and logs them as `policy: human` decisions. Runs in shadow during bot matches (`shadow.jsonl`) to measure its own accuracy. |
+| `sim.py` | RoyaleSim adapter (engine pinned in requirements.txt): our card keys -> engine names, decks/levels/forms, units in tiles, play/step. |
 | `framedevice.py` | Offline replay of a run's frames (`--frames`). |
 | `opponent.py` | Opponent model: known cards, play order (cycle), spells possibly in hand, spell-safe placement. |
 | `economy.py` | Opponent elixir estimate. Regen rate learned from our own bar, so double/triple elixir needs no timer. |

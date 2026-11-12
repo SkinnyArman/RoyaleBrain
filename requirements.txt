@@ -1,3 +1,5 @@
 opencv-python
 numpy
 scikit-learn
+royalesim==0.1.51
+pyarrow

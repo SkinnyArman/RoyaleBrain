@@ -51,7 +51,7 @@ Principles:
 | ~~S1-S2~~ | ~~Own simulator + TV Royale extraction~~ | **dropped**: RoyaleSim + IL_Replay instead |
 | V | Verify RoyaleSim + IL_Replay locally | **done** (experiments #21): our deck loads, ~75k battles/h/core, 99% of replay plays accepted, open-loop winner agreement 60% |
 | **B** | **Benchmark**: fixed Training Camp opponent, 5 matches per version, wins / crowns / tower-damage difference | next (small) |
-| R1 | Replay pipeline: IL_Replay plays -> RoyaleSim -> per-tick state; filter to our cards / arena levels | after V |
+| R1 | Replay pipeline: IL_Replay plays -> RoyaleSim -> samples (`tools.fetch_replays`, `tools.build_dataset`) | **in progress**: 29/52 shards downloaded, building (#23) |
 | R2 | Bridge: our screen pixels <-> RoyaleSim tile coordinates; our live `State` <-> the policy's observation | after V |
 | R3 | Imitation: network predicts card, tile, timing (or wait) from the visible state, outcome-weighted; a win-probability model alongside | after R1-R2 |
 | R4 | Self-play RL (PPO) in RoyaleSim: our deck vs a pool of real replay decks, starting from R3; scored in the sim and on benchmark B | later |

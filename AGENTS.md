@@ -26,6 +26,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # once
 ./play --dry-run                            # same, but never tap (watch + log only)
 ./play --tower-hp 4032                      # optional match info
 ./watch 5                                   # watch the OWNER play 5 real matches (never taps), battle log, report
+.venv/bin/python -m tools.fetch_replays     # download IL_Replay pro replays -> datasets/il_replay (resumable)
+.venv/bin/python -m tools.build_dataset --shards 0:29   # replays -> RoyaleSim -> training samples (datasets/samples)
+.venv/bin/python -m tools.sim_watch --open # play a battle in RoyaleSim and watch it (video in sims/)
 ./tvroyale 10                               # from the main page: record 10 TV Royale replays (both sides)
 .venv/bin/python -m tools.battlelog         # true results + both decks for recent runs (needs .env)
 .venv/bin/python -m tools.label_run runs/<id> --single   # label enemy crops against the real deck

@@ -380,3 +380,30 @@ Setup: royalesim 0.1.51 in a throwaway venv (owner approved), Python 3.14, this 
   counter from public events, action delay + extrapolation modelled. Hardware: multi-GPU (cuda:0-3).
   Has a decision-time rollout search (search_s0) as an experiment; not in its reported results.
   Results: ~14k trophies (51.5% over 4,499), Ranked 33-48%.
+
+## #22  2026-11-10  RoyaleSim pinned in the bot; battle viewer
+
+royalesim==0.1.51 added to requirements.txt (owner approved). `bot/sim.py` adapts our card keys,
+levels and forms to the engine; `tools/sim_watch.py` plays a battle (placeholder random players on
+both sides, no trained model yet) and renders an H.264 video to sims/ (git-ignored): a 3-minute
+battle renders in ~10s. tests/test_sim.py: our deck loads, a play is accepted, same seed -> same
+battle.
+
+## #23  2026-11-11  Replay dataset: download + samples from RoyaleSim
+
+- `tools/fetch_replays.py`: only IL_Replay's `replays/` shards (0.83 GB; each payload already holds
+  every play, `actions/` is an expanded copy), resumable, SHA-256 checked. First run: 29/52 shards
+  (~145k replays) before the network failed; re-run resumes. PyPI timed out repeatedly the same day;
+  pyarrow installed from the Aliyun mirror (`pip -i https://mirrors.aliyun.com/pypi/simple/`).
+- `tools/build_dataset.py`: each replay re-played in RoyaleSim (real levels, evo/hero forms, tower
+  levels); a sample at every play + a "wait" sample per side per 3s without a play. Inputs from the
+  acting player's view (own king at the bottom; red rotated 180 degrees): up to 48 units (card id +
+  8 features), 12 scalars (time, elixir, public enemy-elixir count, 6 tower HP, crowns, overtime),
+  hand + next, enemy cards seen. Labels: hand slot (or wait) + tile; outcome = the player's real
+  result. `drift` = plays rejected so far (open-loop drift, #21). Chunks of 1,000 replays per file
+  (9 GB RAM machine), atomic writes, resumable.
+- Check on 40 replays: 6,244 samples (2,421 plays, 3,823 waits), 96% of plays reproduced; 85% / 87%
+  of plays in the own half for blue / red (rotation correct); results 51% win / 49% loss; ~4 units
+  per sample (max 26). ~6.5 KB per replay compressed: all 145k replays ~1 GB.
+- Not phone-identical yet: enemy unit ids are true ids (training will mask a share to "unknown");
+  enemy elixir is the exact public count (live is an estimate).
