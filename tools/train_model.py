@@ -152,7 +152,7 @@ def status(path):
     ck = torch.load(path, map_location="cpu", weights_only=False)
     step, total = ck.get("step", ck["args"]["steps"]), ck["args"]["steps"]
     print(f"{_bar(step / total)} {step / total:6.1%}  step {step:,}/{total:,}  "
-          + ("finished" if step >= total else "stopped, ./train continues it"))
+          + ("finished" if step >= total else "last save (if it is not running: ./train continues it)"))
     hist = json.loads(path.with_suffix(".json").read_text()) if path.with_suffix(".json").exists() else []
     if hist:
         m = hist[-1]

@@ -1,0 +1,10 @@
+#!/bin/bash
+# SB: the simulator benchmark. Our deck, played by a player, vs 200 held-out real pro decks.
+#   ./bench rules                  the rule brain (the baseline to beat)
+#   ./bench models/r3.pt           a trained model (works while it trains: uses the last save)
+#   ./bench random                 floor: random legal plays
+#   ./bench models/r3.pt --vs models/r3.pt     opponents played by a model instead of pro replays
+#   ./bench models/r3.pt --video 3             also save videos of the first 3 matches in sims/
+# Every run plays the same matches, so the numbers compare directly. Results: runs/bench/.
+cd "$(dirname "$0")" || exit 1
+exec .venv/bin/python -m tools.sim_bench "$@" 2> >(grep -v "objc\[" >&2)

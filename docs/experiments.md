@@ -453,3 +453,32 @@ schedule, step); rerunning the same name continues it exactly; a finished name r
 `--name r3b --init models/r3.pt`. Estimate from samples_v1: ~150 samples and ~53 plays per replay ->
 ~38M samples for 252k replays; training keeps plays + 40% of waits minus held-out = ~22M per pass =
 ~44k steps of 512 at ~2.2 steps/s = ~5.5-6 h (+ ~22 held-out checks).
+
+## #26  2026-11-12  SB: the simulator benchmark
+
+Question: does a player (rule brain, model, random) win with our deck against real decks?
+Setup (`./bench <player>`, tools/sim_bench.py): our deck at our levels (blue) vs 200 HELD-OUT pro
+matches (replay id % 50 == 0, never trained on) that lasted 3:00+, alternating which side's deck we
+face; our deck order shuffled per match with a fixed seed. Same 200 matches for every run, so two
+runs compare match by match. Opponent (`--vs`): `replay` (default) = the pro's real moves replayed at
+their time and spot, rotated to red; it does not react to us, and plays randomly once the real
+match's moves run out; or a model checkpoint playing the opponent's deck.
+- Rule brain in the sim: Brain unchanged, fed tracks built from the sim's units (perfect vision: all
+  units, all enemy cards, our own troops), the same public enemy-elixir count as the model. Tiles <->
+  phone pixels fitted on layout.py anchors (x exact, y +-50 px). Bug found on the way: the rule
+  player looked cards up in the unshuffled deck order (it thought slot 3 was a cheap card).
+  Remaining refusals ~1.5/match, mostly the brain aiming the Log at an enemy tower: the engine only
+  allows the Log on our own side (OUT_OF_TERRITORY). Not changed (the brain is the frozen baseline);
+  Owner (2026-11-12): in the real game the Log can be cast at most at the bridge (it rolls on to
+  the tower), so the ENGINE IS RIGHT and the brain's Log finish is a live bug too (taps an illegal spot).
+- Model player: same observation as training; plays when gate logit > 0, its best card if
+  affordable (else waits for it), best LEGAL tile (engine check_deploy). Gate measured: at 0, ~24
+  plays in 2:36 (pros ~26 per 3:00); a prior correction to ln(15) = 2.7 made it never play.
+- Replay opponents first went idle after a short real match ended (12 plays then nothing): fixed by
+  using only 3:00+ matches and a random fallback.
+First small runs (12 matches, too few to trust; 95% ranges overlap): random 1/12, rules 3/12,
+r3 at 4k steps 5/12 (plays ~29/match, 0 refusals). ~2 s per match per worker.
+Memory: the 8 GB Mac cannot run 3 bench workers (each loads PyTorch) next to training: swap hit
+7.2/8 GB and training stalled ~30 min. Held-out selection now streams 50-row batches (180 MB peak,
+was a whole shard's payload column); default 2 workers. Run full benches after training, or with
+`--workers 1` during it.
