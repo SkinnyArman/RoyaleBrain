@@ -13,9 +13,10 @@ One sample = what that player could see at that moment, plus the label:
   units       up to K_UNITS non-tower bodies: card id + [own, x, y, hp_frac, max_hp, radius,
               flying, deploying]; nearest to the actor's king first
   scalars     time, own elixir, enemy elixir (public count of their plays), 6 tower HP fractions,
-              crowns, overtime
+              crowns, overtime, own ability buttons (ready, cost...: ability_features)
   cards       own hand (4) + next card, own deck (8), enemy cards seen so far (up to 8)
-  label       played card (index in hand, or -1 = wait) and tile (x, y) in own frame
+  label       played card (index in hand 0-3, 4 = ability button, -1 = wait) and tile (x, y) in own
+              frame (-1 for waits and ability presses)
   outcome     the actor's REAL result in that match (+1 win / 0 draw / -1 loss) and real crowns
 
 What is NOT perfectly "phone-visible" yet: enemy card ids are true ids (the trainer masks a share of
@@ -32,8 +33,10 @@ import json
 import math
 import random
 import re
+import signal
+import sys
 import time
-from multiprocessing import Pool
+from multiprocessing import Pool, Value
 from pathlib import Path
 
 import numpy as np
@@ -47,7 +50,9 @@ SRC = ROOT / "datasets" / "il_replay"
 OUT = ROOT / "datasets" / "samples"
 K_UNITS = 48
 UNIT_F = 8
-N_SCALARS = 12
+N_SCALARS = 21              # 12 game scalars + 9 ability scalars (see ability_features)
+ABILITY_SLOT = 4            # label_slot 4 = "press the ability button" (0-3 = hand cards, -1 = wait)
+MAX_ABILITIES = 2
 WAIT_EVERY_S = 3.0          # one wait sample per side per 3s of no play
 HOLD_TICKS = 60             # a play may wait this long for its card / elixir
 REGEN_MILLI_PER_TICK = (1000 / 2.8) / TICKS_PER_S   # single elixir (x2 in the last minute; overtime ignored)
@@ -82,6 +87,18 @@ def own_frame(x, y, side):
     return (x, y) if side == 0 else (W_TILES - x, H_TILES - y)
 
 
+def ability_features(me):
+    """Own champion / hero ability buttons: [ready, field1/10, cost/10, field4/100] for up to 2,
+    plus how many buttons exist. RoyaleSim's per-button record is [ready, ?, cost, card id, ?];
+    'ready' goes 1 when the unit is on the field and the ability can be pressed (2026-11-12)."""
+    out = []
+    abilities = me.get("abilities") or []
+    for k in range(MAX_ABILITIES):
+        a = abilities[k] if k < len(abilities) else [0, 0, 0, -1, 0]
+        out += [float(a[0] > 0), a[1] / 10, a[2] / 10, a[4] / 100]
+    return out + [len(abilities) / 3]
+
+
 def observe(sim, st, side, seen, enemy_spent, F):
     """One sample's inputs from `side`'s point of view."""
     me, them = st["players"][side], st["players"][1 - side]
@@ -110,7 +127,8 @@ def observe(sim, st, side, seen, enemy_spent, F):
     regen = REGEN_MILLI_PER_TICK * (min(tick, double_from) + 2 * max(0, tick - double_from))
     enemy_elixir = max(0.0, min(10.0, (5000 + regen - enemy_spent) / 1000))  # public count, approx.
     scalars = np.array([tick / (3 * 60 * TICKS_PER_S), me["elixir_milli"] / 10000, enemy_elixir / 10,
-                        *towers, me["crowns"] / 3, them["crowns"] / 3, float(st["overtime"])],
+                        *towers, me["crowns"] / 3, them["crowns"] / 3, float(st["overtime"]),
+                        *ability_features(me)],
                        np.float16)[:N_SCALARS]
     hand = np.array([c if c is not None else -1 for c in me["hand"]] + [me["next_card"] if me["next_card"] is not None else -1],
                     np.int16)
@@ -118,6 +136,16 @@ def observe(sim, st, side, seen, enemy_spent, F):
     for i, c in enumerate(list(seen)[:8]):
         enemy_seen[i] = c
     return unit_ids, units, scalars, hand, enemy_seen
+
+
+def ability_button(mapper, player, ev):
+    """Which ability button (0..2) this press is: a READY button, preferring the one whose card
+    matches the event's candidate source card. None = nothing pressable right now."""
+    abilities = player.get("abilities") or []
+    want = {mapper(k)[0] for k in (ev.get("ability_source_candidates") or [])} - {None}
+    ready = [k for k, a in enumerate(abilities) if a[0] > 0]
+    match = [k for k in ready if abilities[k][3] in want]
+    return (match or ready or [None])[0]
 
 
 def build_replay(sim, mapper, payload, F):
@@ -146,7 +174,10 @@ def build_replay(sim, mapper, payload, F):
         return None, "reset_error"
     real = (bt["team"]["crowns"], bt["opponent"]["crowns"])
     result = [(real[0] > real[1]) - (real[0] < real[1]), (real[1] > real[0]) - (real[1] < real[0])]
-    events = sorted([e for e in payload["events"] if e["kind"] == "play_card"], key=lambda e: e["replay_tick_20hz"])
+    # card plays AND ability presses (champions, heroes): 91% of pro replays press abilities; skipping
+    # them left champions idle and elixir too high in the sim (2026-11-12)
+    events = sorted([e for e in payload["events"] if e["kind"] in ("play_card", "activate_ability")],
+                    key=lambda e: e["replay_tick_20hz"])
     rows, pending, i = [], [], 0
     seen = [set(), set()]                # cards each side has seen the OTHER side play
     spent = [0, 0]                       # elixir (milli) each side has publicly spent
@@ -162,11 +193,21 @@ def build_replay(sim, mapper, payload, F):
         cmds, keep = [], []
         for ev, t0 in pending:
             side = 0 if ev["side"] == "team" else 1
+            if ev["kind"] == "activate_ability":
+                k = ability_button(mapper, st["players"][side], ev)
+                if k is not None:
+                    cost = st["players"][side]["abilities"][k][2]
+                    cmds.append((side, ABILITY_SLOT + k, 0, 0, ev, t0, None, 1000 * cost))
+                elif tick - t0 < HOLD_TICKS:
+                    keep.append([ev, t0])
+                else:
+                    rejected += 1
+                continue
             cid, _ = mapper(ev["card_key"])
             hand = st["players"][side]["hand"]
             if cid in hand:
                 c = ev["coordinates"]["native_world_units"]
-                cmds.append((side, hand.index(cid), c["x"] * 18, c["y"] * 18, ev, t0, cid))
+                cmds.append((side, hand.index(cid), c["x"] * 18, c["y"] * 18, ev, t0, cid, 1000 * sim.cost[cid]))
             elif tick - t0 < HOLD_TICKS:
                 keep.append([ev, t0])
             else:
@@ -178,8 +219,12 @@ def build_replay(sim, mapper, payload, F):
                 rows.append((*observe(sim, st, side, seen[side], spent[1 - side], F), -1, -1.0, -1.0,
                              result[side], real[side], real[1 - side], side, tick, rejected))
                 last_play[side] = tick
-        for side, slot, x, y, ev, t0, cid in cmds:
+        for side, slot, x, y, ev, t0, cid, cost in cmds:
             obs = observe(sim, st, side, seen[side], spent[1 - side], F)
+            if cid is None:                                     # ability press: no position
+                rows.append((*obs, ABILITY_SLOT, -1.0, -1.0, result[side], real[side], real[1 - side],
+                             side, tick, rejected))
+                continue
             lx, ly = own_frame(x / TILE, y / TILE, side)
             rows.append((*obs, slot, lx / W_TILES, ly / H_TILES, result[side], real[side], real[1 - side],
                          side, tick, rejected))
@@ -188,8 +233,9 @@ def build_replay(sim, mapper, payload, F):
             for c, r in zip(cmds, res):
                 if royalesim.DEPLOY_REASONS[r[1]] == "OK":
                     accepted += 1
-                    seen[1 - c[0]].add(c[6])
-                    spent[c[0]] += 1000 * sim.cost[c[6]]
+                    if c[6] is not None:
+                        seen[1 - c[0]].add(c[6])
+                    spent[c[0]] += c[7]
                     last_play[c[0]] = tick
                 else:
                     rejected += 1
@@ -203,6 +249,19 @@ def build_replay(sim, mapper, payload, F):
 CHUNK = 1000                 # replays per output file: bounds each worker's memory (~9 GB RAM machine)
 COLS = ("unit_ids", "units", "scalars", "hand", "enemy_seen", "label_slot", "label_x", "label_y", "result",
         "crowns_own", "crowns_opp", "side", "tick", "drift", "replay")
+_done = None                 # shared counters for the progress bar: replays, samples, skipped, chunks
+
+
+def _init(counters):
+    global _done
+    _done = counters
+    signal.signal(signal.SIGINT, signal.SIG_IGN)       # Ctrl-C is handled once, by the main process
+
+
+def _add(i, n):
+    if _done is not None:
+        with _done[i].get_lock():
+            _done[i].value += n
 
 
 def build_shard(args):
@@ -222,8 +281,10 @@ def build_shard(args):
         for r in range(c0, min(n, c0 + CHUNK)):
             payload = json.loads(table.slice(r, 1).column(0)[0].as_py())
             out, why = build_replay(sim, mapper, payload, F)
+            _add(0, 1)
             if out is None:
                 skipped[why] = skipped.get(why, 0) + 1
+                _add(2, 1)
                 continue
             rows, acc, rej = out
             acc_rates.append(acc / max(1, acc + rej))
@@ -235,25 +296,103 @@ def build_shard(args):
         np.savez_compressed(tmp, **{k: np.array(v) for k, v in cols.items()})
         tmp.rename(dest)                               # never leave a half-written chunk behind
         total += len(cols["side"])
+        _add(1, len(cols["side"]))
+        _add(3, 1)
     return Path(path).name, n, total, skipped, float(np.mean(acc_rates)) if acc_rates else 0.0
 
 
 def main():
+    signal.signal(signal.SIGINT, signal.default_int_handler)   # Ctrl-C works even if launched from a script
     ap = argparse.ArgumentParser()
     ap.add_argument("--shards", default="0:1", help="range of shard indices, e.g. 0:4")
     ap.add_argument("--limit", type=int, default=None, help="replays per shard (testing)")
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--status", action="store_true", help="only show how much is built, then exit")
     a = ap.parse_args()
     lo, hi = (int(v) for v in a.shards.split(":"))
     files = sorted(SRC.glob("part-*.parquet"))[lo:hi]
     if not files:
         raise SystemExit(f"no shards in {SRC} for {a.shards}: run tools.fetch_replays first")
     OUT.mkdir(parents=True, exist_ok=True)
+    # how much is already built (finished chunks are skipped on resume)
+    total = done = chunks_total = chunks_done = 0
+    for f in files:
+        n = pq.ParquetFile(f).metadata.num_rows if a.limit is None else min(a.limit, pq.ParquetFile(f).metadata.num_rows)
+        stem = f.stem.split("-")[-1]
+        for c0 in range(0, n, CHUNK):
+            chunks_total += 1
+            if a.limit is None and (OUT / f"shard-{stem}-{c0 // CHUNK:02d}.npz").exists():
+                chunks_done += 1
+                done += min(CHUNK, n - c0)
+        total += n
+    print(f"{len(files)} shards, {total:,} replays, {chunks_total} chunks; already built: "
+          f"{chunks_done} chunks ({done:,} replays). Ctrl-C stops; finished chunks are kept.", flush=True)
+    if a.status:
+        size = sum(f.stat().st_size for f in OUT.glob("shard-*.npz")) / 1e9
+        bar = "#" * int(30 * done / max(1, total))
+        print(f"[{bar:<30}] {done / max(1, total):6.1%}  {done:,}/{total:,} replays  "
+              f"{chunks_done}/{chunks_total} chunks  {size:.2f} GB on disk")
+        return
+    if chunks_done == chunks_total and a.limit is None:
+        print("everything is already built, nothing to do. Next: ./train")
+        return
+
+    counters = [Value("q", 0) for _ in range(4)]       # replays, samples, skipped, chunks (this run)
+    messages, results = [], []
     t0 = time.time()
-    with Pool(min(a.workers, len(files))) as pool:
-        for name, n, rows, skipped, acc in pool.imap_unordered(build_shard, [(f, a.limit) for f in files]):
-            print(f"{name}: {n} replays -> {rows} samples, plays accepted {acc:.1%}, skipped {skipped}", flush=True)
-    print(f"done in {time.time() - t0:.0f}s -> {OUT}")
+    tty = sys.stdout.isatty()
+    last_line = 0.0
+
+    def draw(final=False):
+        nonlocal last_line
+        r, s, sk, ch = (c.value for c in counters)
+        el = time.time() - t0
+        rate = r / el if el > 0 else 0.0
+        left = total - done - r
+        eta = left / rate if rate > 0 else float("inf")
+        frac = (done + r) / max(1, total)
+        bar = "#" * int(frac * 30)
+        line = (f"[{bar:<30}] {frac:6.1%}  {done + r:,}/{total:,} replays  chunks {chunks_done + ch}/{chunks_total}  "
+                f"{s:,} samples  skipped {sk}  {rate:.1f} replays/s  elapsed {_hms(el)}  ETA {_hms(eta)}")
+        if tty:
+            print("\r\033[K" + line, end="\n" if final else "", flush=True)
+        elif final or time.time() - last_line >= 30:   # piped to a file: one line every 30s
+            print(line, flush=True)
+            last_line = time.time()
+
+    pool = Pool(min(a.workers, len(files)), initializer=_init, initargs=(counters,))
+    try:
+        for f in files:
+            results.append(pool.apply_async(build_shard, ((f, a.limit),), callback=lambda res: messages.append(
+                f"{res[0]}: {res[1]} replays -> {res[2]} samples, plays accepted {res[4]:.1%}, skipped {res[3]}")))
+        pool.close()
+        while not all(r.ready() for r in results):
+            while messages:
+                print(("\r\033[K" if tty else "") + messages.pop(0), flush=True)
+            draw()
+            time.sleep(0.5)
+        for r in results:
+            r.get()                                     # re-raise a worker's error here
+        while messages:
+            print(("\r\033[K" if tty else "") + messages.pop(0), flush=True)
+        draw(final=True)
+        pool.join()
+    except KeyboardInterrupt:
+        pool.terminate()
+        pool.join()
+        for tmp in OUT.glob("*.tmp.npz"):               # a chunk cut off mid-save
+            tmp.unlink()
+        draw(final=True)
+        print("stopped: finished chunks are kept, run the same command again to resume")
+        return
+    print(f"done in {_hms(time.time() - t0)} -> {OUT}")
+
+
+def _hms(s):
+    if s == float("inf"):
+        return "--:--:--"
+    s = int(s)
+    return f"{s // 3600:d}:{s % 3600 // 60:02d}:{s % 60:02d}"
 
 
 if __name__ == "__main__":

@@ -1,0 +1,11 @@
+#!/bin/bash
+# Build the training data: re-play every pro replay in RoyaleSim and save samples.
+#   ./build              build (or resume) everything, live progress bar; Ctrl+C stops safely
+#   ./build --status     just show how far it is, don't build
+#   ./build --workers 4  use fewer CPU cores (default 7 of 8: the Mac is slow while it runs)
+# Stopping is always safe: finished chunks (1,000 replays each) are kept; running ./build again
+# continues where it stopped.
+cd "$(dirname "$0")" || exit 1
+args=("$@")
+[[ " $* " == *" --workers "* ]] || args+=(--workers 7)
+exec .venv/bin/python -m tools.build_dataset --shards 0:52 "${args[@]}" 2> >(grep -v "objc\[" >&2)

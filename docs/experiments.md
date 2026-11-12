@@ -407,3 +407,49 @@ battle.
   per sample (max 26). ~6.5 KB per replay compressed: all 145k replays ~1 GB.
 - Not phone-identical yet: enemy unit ids are true ids (training will mask a share to "unknown");
   enemy elixir is the exact public count (live is an estimate).
+
+## #24  2026-11-11  R3: first model (RoyaleBrain) and Mac GPU speed
+
+PyTorch 2.15 (owner OK; Aliyun mirror), Apple GPU (MPS) available. `bot/model.py`: 1.08M
+parameters, d=128, 4 layers, 4 heads; tokens = 1 global + units + 5 hand + seen cards; each card =
+learned identity + engine card-table stats (`Sim.card_table`, 12 numbers). Heads: gate (play/wait),
+card (pointer over the 4 hand cards), tile (576 cells, conditioned on the card), value (win prob).
+`tools/train_model.py`: streams the 1,000-replay chunks; held out = replays with id % 50 == 0;
+40% of wait samples kept; sample weight 1/(1 + drift/3); training hides 50% of enemy unit ids and
+30% of seen cards (live recognition is partial).
+Speed (this Mac): 600 ms/step at batch 512 at first. Not the data (4 ms/batch). A bare 4-layer
+transformer was ~500 ms/step on 62 tokens; most unit slots are empty (~4 units per sample), so
+batches are now trimmed to the occupied slots (2.5x on a bench; 1.5 -> 2.2 steps/s in training,
+~1,100 samples/s). fp16/bf16 autocast gave nothing on MPS. Reading losses only every 20 steps.
+Smoke run (300 steps, held-out): card 41%, tile exact 10% / within 1 tile 20%, play/wait 61-63%,
+winner 53-55%. Main run r3a: 20,000 steps (~10M samples, ~2.5 h) on 114 chunks (~114k replays).
+Follow-up (owner): the full-data run continues from r3a's weights if r3a checks out, instead of
+starting over: `tools.train_model --init models/r3a.pt --name r3b`. New checkpoints also store the
+optimizer state and total steps, so later continuations resume exactly.
+
+## #25  2026-11-12  Abilities were missing from the dataset; rebuild
+
+Owner asked whether champion/hero abilities cost elixir. In RoyaleSim: yes (Golden Knight press =
+-1 elixir; command slot 4 = first ability button; per-button record [ready, ?, cost, card id, ?]).
+IL_Replay has `activate_ability` events (side + tick, no position): 7,654 in 2,000 replays (~5% of
+actions), in 91% of replays. The builder ignored them: champions/heroes never used abilities in the
+re-played matches, elixir stayed too high, and the model could never learn to press.
+Fix: presses replayed at their tick on a ready button (matching the event's candidate card);
+label_slot 4 = ability press (no tile); 9 ability scalars (ready, cost... for 2 buttons); model's
+card head gets a 5th option, masked unless a button is ready. 74% of presses reproduce (rest: unit
+dead / not ready after drift). Old samples could not be patched: 45% of them precede the first
+press and are still valid, but every match must be re-simulated from its start anyway and they lack
+the ability inputs. Old data kept in datasets/samples_v1, old model as models/r3a_noabilities.pt.
+r3a (no abilities) as a pipeline check, held-out after 8,000 steps (74 min): card 61.5%, tile within
+1 tile 40%, play/wait 70%, winner 60% (from 41% / 20% / 62% / 55% at 300 steps): training works.
+Builder speed: the engine's step() is ~80% of the time (0.08 s/replay); the earlier slow rate came
+from sharing the CPU with training. Full rebuild with 7 workers started.
+Build command (owner): `./build` (7 workers by default, live progress bar, Ctrl+C stops safely, rerun
+resumes), `./build --status`. The builder now re-enables SIGINT itself (a process launched in the
+background of a script ignores it). Measured: ~23 replays/s with 2 workers.
+Train command (owner): `./train` (= tools.train_model --name r3 --steps 44000 --eval-every 2000),
+`./train --status`. Ctrl+C saves the checkpoint at that step (weights, Adam state, learning-rate
+schedule, step); rerunning the same name continues it exactly; a finished name refuses and points to
+`--name r3b --init models/r3.pt`. Estimate from samples_v1: ~150 samples and ~53 plays per replay ->
+~38M samples for 252k replays; training keeps plays + 40% of waits minus held-out = ~22M per pass =
+~44k steps of 512 at ~2.2 steps/s = ~5.5-6 h (+ ~22 held-out checks).

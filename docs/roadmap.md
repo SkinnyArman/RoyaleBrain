@@ -50,12 +50,14 @@ Principles:
 | ~~L1-L2~~ | ~~Outcome scorer on our own matches (LightGBM, features, placements)~~ | **removed 2026-11-10** (experiments #20) |
 | ~~S1-S2~~ | ~~Own simulator + TV Royale extraction~~ | **dropped**: RoyaleSim + IL_Replay instead |
 | V | Verify RoyaleSim + IL_Replay locally | **done** (experiments #21): our deck loads, ~75k battles/h/core, 99% of replay plays accepted, open-loop winner agreement 60% |
-| **B** | **Benchmark**: fixed Training Camp opponent, 5 matches per version, wins / crowns / tower-damage difference | next (small) |
-| R1 | Replay pipeline: IL_Replay plays -> RoyaleSim -> samples (`tools.fetch_replays`, `tools.build_dataset`) | **in progress**: 29/52 shards downloaded, building (#23) |
-| R2 | Bridge: our screen pixels <-> RoyaleSim tile coordinates; our live `State` <-> the policy's observation | after V |
-| R3 | Imitation: network predicts card, tile, timing (or wait) from the visible state, outcome-weighted; a win-probability model alongside | after R1-R2 |
-| R4 | Self-play RL (PPO) in RoyaleSim: our deck vs a pool of real replay decks, starting from R3; scored in the sim and on benchmark B | later |
-| R5 | Deploy: trained policy behind our perception/execution; default only if it beats the rule baseline on B | later |
+| R1 | Replay pipeline: IL_Replay -> RoyaleSim -> samples (`tools.fetch_replays`, `tools.build_dataset`) | **done** 2026-11-12: 251,291 matches (947 skipped), 37.1M samples, 13.4M plays incl. 583k ability presses (#23, #25). `./build` |
+| **R3** | **First model (imitation + value)**: transformer over units / scalars / hand, cards as stats + identity; heads: wait, card, tile, win probability; enemy ids randomly hidden like live; trained on the Mac GPU | **next**: `./train` (r3, 44k steps = 1 pass, ~5.5 h). r3a (no abilities) was the pipeline check (#24) |
+| **SB** | **Sim benchmark**: model plays our deck vs held-out real decks in RoyaleSim, watchable in `tools.sim_watch`; the rule brain is the baseline. Every change must move this number | next (with R3) |
+| R6 | Decision-time search: rebuild the board in the sim (`reset(spawns=...)`), roll out the model's top moves ~100-200 times in 0.5s, pick by value. Main edge over ClashAI | after SB |
+| R2 | Bridge: screen pixels <-> sim tiles; live `State` -> the model's observation; better enemy recognition (search needs the board right) | after R6 |
+| **B** | **Phone benchmark**: fixed Training Camp opponent, 5 matches per version, wins / crowns / tower-damage difference | with R2 |
+| R5 | Deploy: model (+ search) behind our perception/execution; default only if it beats the rule baseline on B | after R2/B |
+| R4 | Self-play RL (PPO) in RoyaleSim vs a pool of real decks, starting from R3; scored in the sim and on B. Needs a rented GPU | later |
 | 5 | Native Android port | later |
 | - | 2v2 support | owner will specify the extra considerations |
 

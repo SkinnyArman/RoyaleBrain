@@ -1,0 +1,13 @@
+#!/bin/bash
+# Train the model (R3) on the built samples, on the Mac GPU.
+#   ./train              start (or continue) the run, live progress bar; Ctrl+C saves and stops
+#   ./train --status     how far it is + the last held-out scores, don't train
+# Stopping is always safe: Ctrl+C saves the model at that step; running ./train again continues it
+# (same weights, optimizer and learning-rate schedule). Needs ./build to have finished first.
+# 44,000 steps x 512 samples = ~1 pass over the data (~22M training samples); ~5-6 h on this Mac.
+cd "$(dirname "$0")" || exit 1
+args=("$@")
+[[ " $* " == *" --name "* ]] || args+=(--name r3)
+[[ " $* " == *" --steps "* ]] || args+=(--steps 44000)
+[[ " $* " == *" --eval-every "* ]] || args+=(--eval-every 2000)
+exec .venv/bin/python -m tools.train_model "${args[@]}" 2> >(grep -v "objc\[" >&2)

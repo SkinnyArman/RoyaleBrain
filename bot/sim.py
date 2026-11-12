@@ -62,6 +62,21 @@ class Sim:
             raise KeyError(f"card {key!r} -> {name!r} is not in the engine catalogue")
         return self.ids[name], form
 
+    CARD_FEATURES = ["elixir", "count", "radius", "flying", "hitpoints", "troop", "building", "spell",
+                     "hero", "champion", "footprint", "evo_cycle"]
+
+    def card_table(self):
+        """Every catalogue card as numbers (the model's 'cards as stats' input), one row per card id.
+        Values from the engine's own card table at the level battles run at."""
+        rows = []
+        for r in self.catalogue:
+            name, placement, elixir, count, radius, flying, hp, footprint, kind, variants, hero, champion, evo = r
+            rows.append([elixir / 10, (count or 1) / 10, (radius or 0) / TILE, float(bool(flying)),
+                         (hp or 0) / 5000, float(kind == "TROOP"), float(kind == "BUILDING"),
+                         float(kind == "SPELL"), float(bool(hero)), float(bool(champion)),
+                         (footprint or 0) / 4, (evo or 0) / 3])
+        return rows
+
     def name(self, card_id):
         return self.catalogue[card_id][0] if 0 <= card_id < len(self.catalogue) else "?"
 
