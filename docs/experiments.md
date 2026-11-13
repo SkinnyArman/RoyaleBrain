@@ -482,3 +482,41 @@ Memory: the 8 GB Mac cannot run 3 bench workers (each loads PyTorch) next to tra
 7.2/8 GB and training stalled ~30 min. Held-out selection now streams 50-row batches (180 MB peak,
 was a whole shard's payload column); default 2 workers. Run full benches after training, or with
 `--workers 1` during it.
+
+## #27  2026-11-13  r3 finished; first full benchmark: the model beats the rule brain
+
+r3: 44,000 steps (1 pass, ~22M samples), resumed several times. Held-out: card 64.7%, tile within
+1 tile 48.0%, play/wait 70.1%, winner 59.6%, ability presses 53.5% (r3a: 61.5 / 40.4 / 69.6 / 60.2 / -).
+Card and tile kept improving; timing and win prediction stayed flat.
+SB, 200 held-out pro matches vs replayed pro moves (`./bench`, 4 workers, < 1 min each):
+
+| player | won | 95% range | crowns for-against | tower dmg dealt / taken | plays/match | refused |
+|---|---|---|---|---|---|---|
+| random | 30 (15.0%) | 11-21% | 0.59-2.51 | 37% / 76% | 13.4 | 0 |
+| rules | 61 (30.5%) | 25-37% | 1.13-1.84 | 56% / 65% | 23.3 | 2.0 |
+| **r3** | **95 (47.5%)** | 41-54% | 1.48-1.54 | 61% / 58% | 23.4 | 0 |
+
+Same matches, compared one by one: both won 53, only the model 42, only the rules 8 (sign test
+p < 0.0001). The model is clearly better than the rule brain here. Limits: the opponent replays a
+pro's moves blind (does not react); sim, not phone.
+Fix on the way: one held-out replay has tower level 0 (missing), the engine refuses it and the
+whole benchmark crashed; matches with missing levels are now skipped when the set is picked (the
+set is otherwise the same rule: first 200 valid held-out 3:00+ matches).
+
+## #28  2026-11-13  Equal levels: the real scoreboard
+
+#27 used our real levels vs the pros' (mostly higher). Against a REACTING opponent (r3 playing the
+pro deck) that gave rules 12.5% vs r3 15.0%: mostly a card-level gap, not skill. Owner: compare
+players at equal levels. `./bench` now puts every card and tower on both sides at level 14 by default
+(`--real-levels` for the old setting). Same 200 held-out matches:
+
+| player | vs blind replay | vs r3 (reacts) |
+|---|---|---|
+| rules | 170 (85.0%, 79-89%) | 47 (23.5%, 18-30%), draws 7 |
+| **r3** | 189 (94.5%, 90-97%) | **105 (52.5%, 46-59%)**, draws 24, crowns 0.89-0.79 |
+
+- The blind replay is too easy at equal levels (85-95%): only a sanity check now.
+- r3 vs r3 is ~50% as it should be (same brain both sides; our deck vs real meta decks).
+- r3 is far better than the rule brain against the same reacting opponent (52.5% vs 23.5%).
+- SCOREBOARD from here: `./bench <player> --vs models/r3.pt` (equal levels). r3 = 52.5%; search (R6)
+  must beat that.

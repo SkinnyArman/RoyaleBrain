@@ -51,8 +51,8 @@ Principles:
 | ~~S1-S2~~ | ~~Own simulator + TV Royale extraction~~ | **dropped**: RoyaleSim + IL_Replay instead |
 | V | Verify RoyaleSim + IL_Replay locally | **done** (experiments #21): our deck loads, ~75k battles/h/core, 99% of replay plays accepted, open-loop winner agreement 60% |
 | R1 | Replay pipeline: IL_Replay -> RoyaleSim -> samples (`tools.fetch_replays`, `tools.build_dataset`) | **done** 2026-11-12: 251,291 matches (947 skipped), 37.1M samples, 13.4M plays incl. 583k ability presses (#23, #25). `./build` |
-| **R3** | **First model (imitation + value)**: transformer over units / scalars / hand, cards as stats + identity; heads: wait, card, tile, win probability; enemy ids randomly hidden like live; trained on the Mac GPU | **next**: `./train` (r3, 44k steps = 1 pass, ~5.5 h). r3a (no abilities) was the pipeline check (#24) |
-| **SB** | **Sim benchmark**: model plays our deck vs held-out real decks in RoyaleSim, watchable in `tools.sim_watch`; the rule brain is the baseline. Every change must move this number | **built** (`./bench`, #26); first full numbers after r3 finishes |
+| **R3** | **First model (imitation + value)**: transformer over units / scalars / hand, cards as stats + identity; heads: wait, card, tile, win probability; enemy ids randomly hidden like live; trained on the Mac GPU | **done**: models/r3.pt, card 64.7%, tile within 1 48.0% held-out (#27) |
+| **SB** | **Sim benchmark**: model plays our deck vs held-out real decks in RoyaleSim, watchable in `tools.sim_watch`; the rule brain is the baseline. Every change must move this number | **done**: r3 47.5% vs rules 30.5% vs random 15% (#27) |
 | R6 | Decision-time search: rebuild the board in the sim (`reset(spawns=...)`), roll out the model's top moves ~100-200 times in 0.5s, pick by value. Main edge over ClashAI | after SB |
 | R2 | Bridge: screen pixels <-> sim tiles; live `State` -> the model's observation; better enemy recognition (search needs the board right) | after R6 |
 | **B** | **Phone benchmark**: fixed Training Camp opponent, 5 matches per version, wins / crowns / tower-damage difference | with R2 |

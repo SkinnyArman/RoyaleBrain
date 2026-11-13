@@ -6,6 +6,10 @@
     ./bench models/r3.pt --vs models/r3.pt     # opponents played by a model instead of replays
     ./bench models/r3.pt --matches 50 --video 3   # also render the first 3 matches to sims/
 
+Levels: by default EVERY card and tower on both sides is level 14 (EQUAL_LEVEL), so the benchmark
+measures how well a player plays, not whose cards are higher (owner, 2026-11-13). --real-levels
+uses ours (bot/sim.OUR_LEVELS) vs the pro's real ones instead.
+
 Every run plays the SAME matches (same opponent decks, levels, seeds, our deck order), so two players'
 numbers compare directly, match by match. Results: runs/bench/<time>_<player>.json + a summary line.
 
@@ -48,6 +52,7 @@ STEP = 5                       # ticks per loop (0.25 s); replay opponents act a
 THINK = 10                     # model/rule players decide every 10 ticks (0.5 s), like the live bot
 END_TICK = 5 * 60 * TICKS_PER_S + 100     # 3:00 + 2:00 overtime
 OUR_TOWER_LEVEL = 14
+EQUAL_LEVEL = 14                                     # default: both sides' cards and towers at this level
 MIN_REAL_TICKS = 3 * 60 * TICKS_PER_S - 100          # benchmark matches: the real one lasted ~3:00+
 # GATE: play when the gate logit is above this. Measured 2026-11-12 (r3 at 4k steps): at 0 the model
 # plays ~24 cards in 2:36, the pros' rate (~26 per 3:00); at ln(15) = 2.7 (a prior correction for the
@@ -274,8 +279,9 @@ def make_player(spec, seed, sim, gate=GATE):
 
 # ---------------------------------------------------------------- one match
 def play_match(job):
-    """job: (index, payload_json, pro_side, player spec, opponent spec, gate, video path or None)."""
-    i, payload_json, pro_side, player_spec, vs_spec, gate, video = job
+    """job: (index, payload_json, pro_side, player spec, opponent spec, gate, video path or None,
+    real_levels)."""
+    i, payload_json, pro_side, player_spec, vs_spec, gate, video, real_levels = job
     payload = json.loads(payload_json)
     sim, rng = Sim(), random.Random(i)
     mapper = Mapper(sim)
@@ -291,8 +297,9 @@ def play_match(job):
     sim.b.reset(seed=i, decks=[[c for c, _ in blue], [c for c, _ in red]], shuffle=0, start_tick=0,
                 elixir_milli=[5000, 5000], tower_hp=None, spawns=[],
                 forms=[[f for _, f in blue], [f for _, f in red]],
-                levels=[[OUR_LEVELS.get(k, 14) for k in our_keys], [e["level"] for e in entries]],
-                tower_levels=[OUR_TOWER_LEVEL, pl["tower_card"]["level"]])
+                levels=[[OUR_LEVELS.get(k, 14) for k in our_keys], [e["level"] for e in entries]] if real_levels
+                else [[EQUAL_LEVEL] * 8, [EQUAL_LEVEL] * 8],
+                tower_levels=[OUR_TOWER_LEVEL, pl["tower_card"]["level"]] if real_levels else [EQUAL_LEVEL] * 2)
     ours = make_player(player_spec, i, sim, gate)
     if vs_spec == "replay":
         theirs = ReplayPlayer(payload, pro_side, mapper, random.Random(i + 10**6))
@@ -362,8 +369,11 @@ def held_out(n):
             pro_side = ("team", "opponent")[len(out) % 2]
             if max((e["replay_tick_20hz"] for e in payload["events"]), default=0) < MIN_REAL_TICKS:
                 continue
-            if any(mapper(d["card_key"])[0] is None for d in payload["battle"][pro_side]["players"][0]["deck"]):
+            pl = payload["battle"][pro_side]["players"][0]
+            if any(mapper(d["card_key"])[0] is None for d in pl["deck"]):
                 continue
+            if (pl.get("tower_card") or {}).get("level", 0) < 1 or any(d.get("level", 0) < 1 for d in pl["deck"]):
+                continue                                      # level missing in the replay (engine refuses 0)
             out.append((payload_json, pro_side))
             if len(out) == n:
                 return out
@@ -401,6 +411,7 @@ def main():
     ap.add_argument("--workers", type=int, default=2, help="parallel matches (8 GB Mac: keep low while training)")
     ap.add_argument("--gate", type=float, default=GATE, help="model players: play when the gate logit is above this")
     ap.add_argument("--video", type=int, default=0, help="also render the first N matches to sims/")
+    ap.add_argument("--real-levels", action="store_true", help=f"our real levels vs the pro's (default: all at {EQUAL_LEVEL})")
     a = ap.parse_args()
     for spec in (a.player, a.vs):
         if spec not in ("rules", "random", "replay") and not Path(spec).exists():
@@ -409,13 +420,13 @@ def main():
         raise SystemExit("the rule brain only plays our deck: use it as the player, not --vs")
     print(f"loading {a.matches} held-out matches...", flush=True)
     games = held_out(a.matches)
-    stamp, label = time.strftime("%Y%m%d-%H%M%S"), Path(a.player).stem
+    stamp, label = time.strftime("%Y%m%d-%H%M%S"), Path(a.player).stem + ("_real" if a.real_levels else "")
     jobs = []
     for i, (pj, side) in enumerate(games):
         video = ROOT / "sims" / f"bench_{stamp}_{label}_{i}.mp4" if i < a.video else None
         if video:
             video.parent.mkdir(exist_ok=True)
-        jobs.append((i, pj, side, a.player, a.vs, a.gate, video))
+        jobs.append((i, pj, side, a.player, a.vs, a.gate, video, a.real_levels))
     counter, results, t0 = Value("q", 0), [], time.time()
     tty = sys.stdout.isatty()
     pool = Pool(a.workers, initializer=_init, initargs=(counter,))
@@ -458,7 +469,7 @@ def main():
                    tower_dmg_dealt=round(mean("dmg_dealt"), 4), tower_dmg_taken=round(mean("dmg_taken"), 4),
                    plays=round(sum(r["plays"][0] for r in results) / max(1, n), 1),
                    rejected=round(sum(r["rejected"][0] for r in results) / max(1, n), 1),
-                   gate=a.gate, minutes=round((time.time() - t0) / 60, 1))
+                   gate=a.gate, levels="real" if a.real_levels else f"all {EQUAL_LEVEL}", minutes=round((time.time() - t0) / 60, 1))
     OUT.mkdir(parents=True, exist_ok=True)
     path = OUT / f"{stamp}_{label}_vs_{Path(a.vs).stem}.json"
     path.write_text(json.dumps(dict(summary=summary, matches=results), indent=1))

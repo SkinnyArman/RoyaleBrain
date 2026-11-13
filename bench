@@ -5,6 +5,7 @@
 #   ./bench random                 floor: random legal plays
 #   ./bench models/r3.pt --vs models/r3.pt     opponents played by a model instead of pro replays
 #   ./bench models/r3.pt --video 3             also save videos of the first 3 matches in sims/
+# Both sides at level 14 unless --real-levels. Scoreboard: --vs models/r3.pt (#28).
 # Every run plays the same matches, so the numbers compare directly. Results: runs/bench/.
 cd "$(dirname "$0")" || exit 1
 exec .venv/bin/python -m tools.sim_bench "$@" 2> >(grep -v "objc\[" >&2)
