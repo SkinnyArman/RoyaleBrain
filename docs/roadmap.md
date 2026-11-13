@@ -53,13 +53,45 @@ Principles:
 | R1 | Replay pipeline: IL_Replay -> RoyaleSim -> samples (`tools.fetch_replays`, `tools.build_dataset`) | **done** 2026-11-12: 251,291 matches (947 skipped), 37.1M samples, 13.4M plays incl. 583k ability presses (#23, #25). `./build` |
 | **R3** | **First model (imitation + value)**: transformer over units / scalars / hand, cards as stats + identity; heads: wait, card, tile, win probability; enemy ids randomly hidden like live; trained on the Mac GPU | **done**: models/r3.pt, card 64.7%, tile within 1 48.0% held-out (#27) |
 | **SB** | **Sim benchmark**: model plays our deck vs held-out real decks in RoyaleSim, watchable in `tools.sim_watch`; the rule brain is the baseline. Every change must move this number | **done**: r3 47.5% vs rules 30.5% vs random 15% (#27) |
-| R6 | Decision-time search: rebuild the board in the sim (`reset(spawns=...)`), roll out the model's top moves ~100-200 times in 0.5s, pick by value. Main edge over ClashAI | after SB |
+| **R6** | **Decision-time search** (bot/search.py): copy the battle, play the model's top moves a few seconds forward, keep the best. Main edge over ClashAI | **in progress**: v1 built, no clear gain yet (55.0% vs 52.5%, p = 0.69, #29). See "Where we stopped" |
 | R2 | Bridge: screen pixels <-> sim tiles; live `State` -> the model's observation; better enemy recognition (search needs the board right) | after R6 |
 | **B** | **Phone benchmark**: fixed Training Camp opponent, 5 matches per version, wins / crowns / tower-damage difference | with R2 |
 | R5 | Deploy: model (+ search) behind our perception/execution; default only if it beats the rule baseline on B | after R2/B |
 | R4 | Self-play RL (PPO) in RoyaleSim vs a pool of real decks, starting from R3; scored in the sim and on B. Needs a rented GPU | later |
 | 5 | Native Android port | later |
 | - | 2v2 support | owner will specify the extra considerations |
+
+## Where we stopped (2026-11-13): open problems, next steps
+
+Scoreboard: `./bench <player> --vs models/r3.pt` (200 held-out pro decks, model-played, level 14 both
+sides). rules 23.5%, r3 52.5%, r3 + search v1 55.0% (#28, #29).
+
+Shortcomings, most important first:
+1. **Search v1 doesn't clearly help** (52 vs 47 matches won one way or the other, p = 0.69). It plays
+   ~30% more cards. Suspected cause: it scores futures with r3's value head, the weakest output
+   (winner 59.6% held-out, trained on final results of drifting pro re-simulations), so 6 s ahead it
+   can't tell a good move from a busy one.
+2. **The search cheats in the sim**: it copies the exact battle, incl. the opponent's hand, elixir and
+   hidden cards. On the phone it must rebuild the board from what is seen (`reset(spawns=...)`) and
+   guess the hidden part (sample the opponent's hand from unseen cards). Not built.
+3. **The benchmark opponent is the search's own rollout policy** (deterministic r3), so rollouts
+   predict its replies exactly. Use `--vs sample:models/r3.pt` (seeded sampling) for honest numbers
+   once search helps; not run at full scale yet.
+4. **Model timing is weak**: play/wait 70.1%, flat through training (#27).
+5. **Engine bug**: RoyaleSim 0.1.51 can't reload some snapshots with a Bowler on the board (~0.2% of
+   decisions; the plain move is played instead). Worth reporting upstream.
+6. **Benchmark limits**: simulator, not phone; the rule brain gets perfect vision; the blind-replay
+   opponent is too easy at equal levels (85-95%), keep it as a sanity check only.
+7. **Rule brain Log bug** (live too): its tower-finish Log targets past the bridge, illegal in the real
+   game (#26). Brain is frozen as the baseline; not fixed.
+
+Next, cheapest first:
+1. Score futures by what happened, not the value head: tower HP dealt - taken + elixir difference,
+   look-ahead ~10-15 s so pushes land. One benchmark (~20 min) answers it.
+2. Search chooses only WHICH play; the model keeps deciding WHEN.
+3. Retrain the value head on simulator games (r3 vs r3 self-play: exact outcomes, no drift, our levels).
+   Same machinery starts R4 (self-play RL).
+4. Then honest search: `--vs sample:`, then hidden-information search for the phone (R2).
 
 ## How we try to beat ClashAI (all decks, not one)
 

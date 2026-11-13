@@ -4,6 +4,8 @@
     ./bench models/r3.pt             # the trained model, same 200 matches
     ./bench random                   # floor: random legal plays
     ./bench models/r3.pt --vs models/r3.pt     # opponents played by a model instead of replays
+    ./bench search:models/r3.pt --vs models/r3.pt   # R6: the model + decision-time search (bot/search.py)
+    ./bench search:models/r3.pt --vs sample:models/r3.pt   # opponent samples its moves (search can't foresee them)
     ./bench models/r3.pt --matches 50 --video 3   # also render the first 3 matches to sims/
 
 Levels: by default EVERY card and tower on both sides is level 14 (EQUAL_LEVEL), so the benchmark
@@ -110,44 +112,40 @@ class RandomPlayer:
 
 
 class ModelPlayer:
-    def __init__(self, path, gate=GATE):
+    """The trained model, greedy (bot/search.Policy). With search=True it tries its best few moves
+    in copies of the battle first (bot/search.Search, R6)."""
+
+    def __init__(self, path, gate=GATE, search=False, horizon=6.0, sample_seed=None):
         import torch
         from bot.model import RoyaleBrain
+        from bot.search import Policy, Search
         torch.set_num_threads(1)
         ck = torch.load(path, map_location="cpu", weights_only=False)
-        self.model = RoyaleBrain(ck["card_table"], d=ck["args"]["d"], layers=ck["args"]["layers"])
-        self.model.load_state_dict(ck["model"])
-        self.model.eval()
-        self.torch, self.gate, self.name = torch, gate, Path(path).stem
-        self.F = {f: i for i, f in enumerate(royalesim.ENTITY_FIELDS)}
+        model = RoyaleBrain(ck["card_table"], d=ck["args"]["d"], layers=ck["args"]["layers"])
+        model.load_state_dict(ck["model"])
+        model.eval()
+        rng = np.random.default_rng(sample_seed) if sample_seed is not None else None
+        self.policy = Policy(model, Sim().cost, gate, rng)
+        self.search = Search(self.policy, horizon_s=horizon) if search else None
+        self.name = ("search_" if search else "sample_" if rng is not None else "") + Path(path).stem
 
     def act(self, sim, st, side, match):
         if st["tick"] % THINK != (side * STEP) % THINK:
             return []
-        torch, m = self.torch, self.model
-        unit_ids, units, scalars, hand, seen = observe(sim, st, side, match.seen[side], match.spent[1 - side], self.F)
-        t = lambda a, dt: torch.from_numpy(np.asarray(a).astype(dt))[None]
-        ids, hd, sn = t(unit_ids, np.int64), t(hand, np.int64), t(seen, np.int64)
-        for v in (ids, hd, sn):
-            v[v < 0] = m.PAD
-        with torch.no_grad():
-            out = m(ids, t(units, np.float32), t(scalars, np.float32), hd, sn)
-        if out["gate"].item() <= self.gate:
-            return []
-        slot = int(out["card"][0].argmax())
-        pl = st["players"][side]
-        if slot == ABILITY_SLOT:
-            ready = [k for k, a in enumerate(pl.get("abilities") or []) if a[0] > 0 and a[2] * 1000 <= pl["elixir_milli"]]
-            return [(side, ABILITY_SLOT + ready[0], 0, 0)] if ready else []
-        card = pl["hand"][slot]
-        if card is None or card < 0 or sim.cost[card] * 1000 > pl["elixir_milli"]:
-            return []                                         # wants a card it can't afford yet: wait for it
-        for cell in out["tile"][0].argsort(descending=True).tolist():   # best LEGAL tile
-            x, y = own_frame((cell % W_TILES) + 0.5, (cell // W_TILES) + 0.5, side)
-            ex, ey = int(x * TILE), int(y * TILE)
-            if sim.b.check_deploy(side, slot, ex, ey) == OK:
-                return [(side, slot, ex, ey)]
-        return []
+        if self.search:
+            t0 = time.perf_counter()
+            try:
+                c = self.search.choose(sim.b, st, side, match.seen, match.spent)
+                self.search.ms += 1000 * (time.perf_counter() - t0)
+                self.search.calls += 1
+                return [c] if c else []
+            except ValueError:
+                # RoyaleSim 0.1.51 cannot reload some snapshots with a Bowler on the board ("snapshot
+                # entity tables are inconsistent", ~0.2% of decisions, #29): play the plain model's move
+                self.search.fallbacks += 1
+        out = self.policy.forward([(st, side, match.seen[side], match.spent[1 - side])])
+        c = self.policy.greedy(sim.b, st, side, out, 0)
+        return [c] if c else []
 
 
 class ReplayPlayer:
@@ -269,11 +267,15 @@ class RulePlayer:
         return [(side, slot, int(tx * TILE), int(ty * TILE))]
 
 
-def make_player(spec, seed, sim, gate=GATE):
+def make_player(spec, seed, sim, gate=GATE, horizon=6.0):
     if spec == "random":
         return RandomPlayer(random.Random(seed))
     if spec == "rules":
         return RulePlayer(sim)
+    if spec.startswith("sample:"):
+        return ModelPlayer(spec.removeprefix("sample:"), gate, sample_seed=seed)
+    if spec.startswith("search:"):
+        return ModelPlayer(spec.removeprefix("search:"), gate, search=True, horizon=horizon)
     return ModelPlayer(spec, gate)
 
 
@@ -281,7 +283,7 @@ def make_player(spec, seed, sim, gate=GATE):
 def play_match(job):
     """job: (index, payload_json, pro_side, player spec, opponent spec, gate, video path or None,
     real_levels)."""
-    i, payload_json, pro_side, player_spec, vs_spec, gate, video, real_levels = job
+    i, payload_json, pro_side, player_spec, vs_spec, gate, video, real_levels, horizon = job
     payload = json.loads(payload_json)
     sim, rng = Sim(), random.Random(i)
     mapper = Mapper(sim)
@@ -300,7 +302,7 @@ def play_match(job):
                 levels=[[OUR_LEVELS.get(k, 14) for k in our_keys], [e["level"] for e in entries]] if real_levels
                 else [[EQUAL_LEVEL] * 8, [EQUAL_LEVEL] * 8],
                 tower_levels=[OUR_TOWER_LEVEL, pl["tower_card"]["level"]] if real_levels else [EQUAL_LEVEL] * 2)
-    ours = make_player(player_spec, i, sim, gate)
+    ours = make_player(player_spec, i, sim, gate, horizon)
     if vs_spec == "replay":
         theirs = ReplayPlayer(payload, pro_side, mapper, random.Random(i + 10**6))
     else:
@@ -346,7 +348,9 @@ def play_match(job):
         frames.wait()
     P = st["players"]
     lost = lambda team: sum(1 - h / max(1, m) for h, m in zip(P[team]["tower_hp"], P[team]["tower_max_hp"])) / 3
-    return dict(i=i, deck=[sim.name(c) for c, _ in red], winner=st["winner"], crowns=[P[0]["crowns"], P[1]["crowns"]],
+    srch = getattr(ours, "search", None)
+    return dict(i=i, search_ms=round(srch.ms / max(1, srch.calls), 1) if srch else None,
+                search_fallbacks=srch.fallbacks if srch else None, deck=[sim.name(c) for c, _ in red], winner=st["winner"], crowns=[P[0]["crowns"], P[1]["crowns"]],
                 dmg_dealt=round(lost(1), 4), dmg_taken=round(lost(0), 4), plays=plays, rejected=rejected,
                 seconds=st["tick"] / TICKS_PER_S)
 
@@ -411,22 +415,23 @@ def main():
     ap.add_argument("--workers", type=int, default=2, help="parallel matches (8 GB Mac: keep low while training)")
     ap.add_argument("--gate", type=float, default=GATE, help="model players: play when the gate logit is above this")
     ap.add_argument("--video", type=int, default=0, help="also render the first N matches to sims/")
+    ap.add_argument("--horizon", type=float, default=6.0, help="search: seconds each candidate is played forward")
     ap.add_argument("--real-levels", action="store_true", help=f"our real levels vs the pro's (default: all at {EQUAL_LEVEL})")
     a = ap.parse_args()
     for spec in (a.player, a.vs):
-        if spec not in ("rules", "random", "replay") and not Path(spec).exists():
+        if spec not in ("rules", "random", "replay") and not Path(spec.split(":")[-1]).exists():
             raise SystemExit(f"{spec}: no such checkpoint")
     if a.vs == "rules":
         raise SystemExit("the rule brain only plays our deck: use it as the player, not --vs")
     print(f"loading {a.matches} held-out matches...", flush=True)
     games = held_out(a.matches)
-    stamp, label = time.strftime("%Y%m%d-%H%M%S"), Path(a.player).stem + ("_real" if a.real_levels else "")
+    stamp, label = time.strftime("%Y%m%d-%H%M%S"), ("search_" if a.player.startswith("search:") else "") + Path(a.player).stem + ("_real" if a.real_levels else "")
     jobs = []
     for i, (pj, side) in enumerate(games):
         video = ROOT / "sims" / f"bench_{stamp}_{label}_{i}.mp4" if i < a.video else None
         if video:
             video.parent.mkdir(exist_ok=True)
-        jobs.append((i, pj, side, a.player, a.vs, a.gate, video, a.real_levels))
+        jobs.append((i, pj, side, a.player, a.vs, a.gate, video, a.real_levels, a.horizon))
     counter, results, t0 = Value("q", 0), [], time.time()
     tty = sys.stdout.isatty()
     pool = Pool(a.workers, initializer=_init, initargs=(counter,))
@@ -469,11 +474,14 @@ def main():
                    tower_dmg_dealt=round(mean("dmg_dealt"), 4), tower_dmg_taken=round(mean("dmg_taken"), 4),
                    plays=round(sum(r["plays"][0] for r in results) / max(1, n), 1),
                    rejected=round(sum(r["rejected"][0] for r in results) / max(1, n), 1),
-                   gate=a.gate, levels="real" if a.real_levels else f"all {EQUAL_LEVEL}", minutes=round((time.time() - t0) / 60, 1))
+                   gate=a.gate, levels="real" if a.real_levels else f"all {EQUAL_LEVEL}",
+                   search_ms=round(mean("search_ms"), 1) if results[0]["search_ms"] is not None else None,
+                   search_fallbacks=sum(r["search_fallbacks"] for r in results) if results[0]["search_ms"] is not None else None, minutes=round((time.time() - t0) / 60, 1))
     OUT.mkdir(parents=True, exist_ok=True)
-    path = OUT / f"{stamp}_{label}_vs_{Path(a.vs).stem}.json"
+    vs = ("sample_" if a.vs.startswith("sample:") else "") + Path(a.vs.split(":")[-1]).stem
+    path = OUT / f"{stamp}_{label}_vs_{vs}.json"
     path.write_text(json.dumps(dict(summary=summary, matches=results), indent=1))
-    print(f"{label} vs {Path(a.vs).stem}: won {w}/{n} = {w / max(1, n):.1%} (95% range {lo:.0%}-{hi:.0%}), "
+    print(f"{label} vs {vs}: won {w}/{n} = {w / max(1, n):.1%} (95% range {lo:.0%}-{hi:.0%}), "
           f"draws {d}  crowns {summary['crowns_for']:.2f}-{summary['crowns_against']:.2f}  "
           f"tower damage dealt {summary['tower_dmg_dealt']:.0%} taken {summary['tower_dmg_taken']:.0%}  "
           f"plays/match {summary['plays']}  rejected {summary['rejected']}")

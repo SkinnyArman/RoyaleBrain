@@ -520,3 +520,25 @@ players at equal levels. `./bench` now puts every card and tower on both sides a
 - r3 is far better than the rule brain against the same reacting opponent (52.5% vs 23.5%).
 - SCOREBOARD from here: `./bench <player> --vs models/r3.pt` (equal levels). r3 = 52.5%; search (R6)
   must beat that.
+
+## #29  2026-11-13  R6 search, first version: no clear gain yet
+
+bot/search.py: candidates = WAIT + the model's top 2 affordable cards x top 2 legal tiles (<= 5);
+each in an exact copy of the battle (engine save/load, ~3 ms per copy), played 6 s forward with r3
+greedy on both sides (batched forward passes), scored by r3's value head (win probability) for us.
+~36 ms per decision. `./bench search:models/r3.pt --vs models/r3.pt`, same 200 matches, equal levels:
+
+| player vs r3 | won | 95% range | draws | crowns | plays/match |
+|---|---|---|---|---|---|
+| r3 (greedy) | 105 (52.5%) | 46-59% | 24 | 0.89-0.79 | 27.9 |
+| r3 + search | 110 (55.0%) | 48-62% | 20 | 1.18-0.98 | 36.0 |
+
+Match by match: only search won 52, only plain won 47 (sign test p = 0.69): NOT a real improvement,
+even though the rollouts used the opponent's exact policy and its hidden hand/elixir (an oracle a
+real opponent never gives). The search plays ~30% more cards: it prefers having units on the board.
+Likely cause: the value head is the weak part (winner 59.6% held-out, trained on final results of
+pro matches whose re-simulation drifts), so 6 s ahead it cannot tell good moves from busy ones.
+Engine bug found: RoyaleSim 0.1.51 cannot load some snapshots with a Bowler on the board
+("snapshot entity tables are inconsistent", 151 of ~70k decisions); those fall back to the plain move.
+Also added: `--vs sample:<ckpt>`: the opponent samples its card/tile from the model (seeded), so the
+search can't foresee its moves exactly (for honest tests once search helps).

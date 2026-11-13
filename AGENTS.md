@@ -32,6 +32,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # once
 ./train                                     # train RoyaleBrain (r3, 44k steps, Mac GPU); progress bar, Ctrl+C saves, rerun continues
 ./train --status                            # how far training is + last held-out scores
 ./bench models/r3.pt --vs models/r3.pt     # SB scoreboard: our deck vs 200 held-out pro decks, model-played (reacts), equal levels (#28)
+./bench search:models/r3.pt --vs models/r3.pt   # same, with decision-time search (R6, bot/search.py, #29)
 .venv/bin/python -m tools.sim_watch --open # play a battle in RoyaleSim and watch it (video in sims/)
 ./tvroyale 10                               # from the main page: record 10 TV Royale replays (both sides)
 .venv/bin/python -m tools.battlelog         # true results + both decks for recent runs (needs .env)
