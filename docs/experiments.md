@@ -542,3 +542,57 @@ Engine bug found: RoyaleSim 0.1.51 cannot load some snapshots with a Bowler on t
 ("snapshot entity tables are inconsistent", 151 of ~70k decisions); those fall back to the plain move.
 Also added: `--vs sample:<ckpt>`: the opponent samples its card/tile from the model (seeded), so the
 search can't foresee its moves exactly (for honest tests once search helps).
+
+## #30  2026-11-14  Search scored by real outcome: 84% vs 52.5%
+
+Change (bot/search.py, `./bench search:models/r3.pt --vs models/r3.pt --score outcome --timing model
+--horizon 12`): two switches against search v1 (#29).
+- score "outcome" instead of the value head: after the look-ahead, tower HP dealt - taken (1 = a
+  whole tower) + 0.1 x material lead (elixir in the bank + elixir worth of living units x their HP
+  fraction; 10 elixir ~ one tower); a finished match +-3. Hand-made: a stopgap until a value learned
+  from simulator games (self-play) replaces it.
+- timing "model": the model's gate still decides WHEN to play (as without search); search only picks
+  WHICH play among the top 2 affordable cards x top 2 legal tiles.
+- look-ahead 12 s (was 6 s), so pushes reach a tower.
+
+Same 200 held-out matches, equal levels, opponent r3 playing the pro decks:
+
+| player | won | 95% range | draws | crowns | tower dmg dealt / taken | plays |
+|---|---|---|---|---|---|---|
+| r3 (greedy) | 105 (52.5%) | 46-59% | 24 | 0.89-0.79 | 51% / 44% | 27.9 |
+| search v1 (value, search timing, 6 s) | 110 (55.0%) | 48-62% | 20 | 1.18-0.98 | 54% / 50% | 36.0 |
+| **search A (outcome, model timing, 12 s)** | **168 (84.0%)** | 78-88% | 18 | 1.61-0.45 | 70% / 35% | 24.6 |
+
+Match by match vs plain r3: only search A won 78, only plain won 15 (sign test p < 1e-10).
+14.5 ms per decision (searches only when the model wants to play), 17 Bowler-snapshot fallbacks,
+5.5 min for 200 matches on 4 workers.
+
+NOT YET SHOWN, so 84% is an upper bound:
+- The opponent in the rollouts is the benchmark opponent itself (deterministic r3) with its real hand
+  and elixir: search foresees its replies exactly. Next test: `--vs sample:models/r3.pt`.
+- Which switch did it? B run 2026-11-14 (below); C (value score + model timing) not run yet.
+
+Variant B (outcome score, 12 s, but SEARCH decides when, WAIT is a candidate): 161/200 = 80.5%
+(74-85%), draws 7, crowns 1.52-0.61, tower damage 67% / 45%, 30.2 plays/match, 87 ms per decision,
+29 min. Match by match vs A: only B won 22, only A won 29 (p = 0.40): no real difference, and B is
+6x slower and loses more towers. So the OUTCOME SCORE is what made the jump (both ~80-84% vs v1's
+55%); letting search decide timing adds nothing. Keep A (model timing).
+
+Honest-opponent test (2026-11-14): opponent `sample:models/r3.pt` = r3 that SAMPLES its card and tile
+from its probabilities (seeded per match), so the search's greedy rollouts can't foresee its moves.
+Same 200 matches, equal levels:
+
+| player vs sample:r3 | won | 95% range | draws | crowns | tower dmg dealt / taken |
+|---|---|---|---|---|---|
+| r3 (greedy) | 123 (61.5%) | 55-68% | 24 | 1.06-0.64 | 57% / 42% |
+| search A | 169 (84.5%) | 79-89% | 11 | 1.48-0.41 | 66% / 35% |
+
+The sampling opponent is weaker than greedy r3 (plain r3 wins 61.5% instead of 52.5%), so the fair
+measure is the gain over plain r3 on the same opponent: +23 points (was +31.5 against the opponent it
+could predict exactly). Match by match: only search won 54, only plain won 8 (p < 1e-8).
+So most of the gain is real, not foresight of the opponent's exact replies.
+Still in its favour: the rollouts read the opponent's hand and elixir from the engine, and the
+rollout policy is the same model family as the opponent. Correction (owner): on the phone those are
+mostly TRACKABLE, not hidden: elixir = public count of seen plays (capped at 10 at every moment),
+hand = known once all 8 cards were played (fixed cycle), narrowed before that. Truly unknown: unseen
+cards early in the match and plays our vision misses (AGENTS.md).

@@ -53,7 +53,7 @@ Principles:
 | R1 | Replay pipeline: IL_Replay -> RoyaleSim -> samples (`tools.fetch_replays`, `tools.build_dataset`) | **done** 2026-11-12: 251,291 matches (947 skipped), 37.1M samples, 13.4M plays incl. 583k ability presses (#23, #25). `./build` |
 | **R3** | **First model (imitation + value)**: transformer over units / scalars / hand, cards as stats + identity; heads: wait, card, tile, win probability; enemy ids randomly hidden like live; trained on the Mac GPU | **done**: models/r3.pt, card 64.7%, tile within 1 48.0% held-out (#27) |
 | **SB** | **Sim benchmark**: model plays our deck vs held-out real decks in RoyaleSim, watchable in `tools.sim_watch`; the rule brain is the baseline. Every change must move this number | **done**: r3 47.5% vs rules 30.5% vs random 15% (#27) |
-| **R6** | **Decision-time search** (bot/search.py): copy the battle, play the model's top moves a few seconds forward, keep the best. Main edge over ClashAI | **in progress**: v1 built, no clear gain yet (55.0% vs 52.5%, p = 0.69, #29). See "Where we stopped" |
+| **R6** | **Decision-time search** (bot/search.py): copy the battle, play the model's top moves a few seconds forward, keep the best. Main edge over ClashAI | **in progress**: v1 no gain (#29); scored by real outcome: **84.0% vs 52.5%** (#30), not yet tested against an unpredictable opponent. See "Where we stopped" |
 | R2 | Bridge: screen pixels <-> sim tiles; live `State` -> the model's observation; better enemy recognition (search needs the board right) | after R6 |
 | **B** | **Phone benchmark**: fixed Training Camp opponent, 5 matches per version, wins / crowns / tower-damage difference | with R2 |
 | R5 | Deploy: model (+ search) behind our perception/execution; default only if it beats the rule baseline on B | after R2/B |
@@ -65,15 +65,25 @@ Principles:
 
 Scoreboard: `./bench <player> --vs models/r3.pt` (200 held-out pro decks, model-played, level 14 both
 sides). rules 23.5%, r3 52.5%, r3 + search v1 55.0% (#28, #29).
+**Update 2026-11-14 (#30):** search scored by real outcome (towers + material), model decides when,
+12 s look-ahead: **84.0%** (p < 1e-10 vs r3). Shortcoming 1 below is fixed by that; 2 and 3 now matter
+most. Against an opponent it can't predict (`--vs sample:models/r3.pt`): search 84.5% vs plain r3
+61.5% (+23 points, p < 1e-8): mostly real. Remaining edge: it reads the opponent's hand/elixir from the
+engine; on the phone they are tracked (elixir count, card cycle: known once all 8 seen), so only unseen
+cards early on and missed detections are unknown (AGENTS.md). Variants B (search
+decides timing) and C (value score + model timing) not run: wait for the owner's go.
 
 Shortcomings, most important first:
 1. **Search v1 doesn't clearly help** (52 vs 47 matches won one way or the other, p = 0.69). It plays
    ~30% more cards. Suspected cause: it scores futures with r3's value head, the weakest output
    (winner 59.6% held-out, trained on final results of drifting pro re-simulations), so 6 s ahead it
    can't tell a good move from a busy one.
-2. **The search cheats in the sim**: it copies the exact battle, incl. the opponent's hand, elixir and
-   hidden cards. On the phone it must rebuild the board from what is seen (`reset(spawns=...)`) and
-   guess the hidden part (sample the opponent's hand from unseen cards). Not built.
+2. **The search reads the opponent from the engine**: it copies the exact battle, incl. the opponent's
+   hand and elixir. On the phone it must rebuild the board from what is seen (`reset(spawns=...)`), with
+   the opponent's elixir COUNTED from seen plays (capped at 10 continuously) and the hand TRACKED
+   through the cycle (exact once all 8 cards are seen); only unseen cards are sampled. Not built.
+   Also fix: the sim's public elixir count (`Match.enemy_elixir`, build_dataset.observe) caps only at
+   the end, not continuously.
 3. **The benchmark opponent is the search's own rollout policy** (deterministic r3), so rollouts
    predict its replies exactly. Use `--vs sample:models/r3.pt` (seeded sampling) for honest numbers
    once search helps; not run at full scale yet.
@@ -85,13 +95,17 @@ Shortcomings, most important first:
 7. **Rule brain Log bug** (live too): its tower-finish Log targets past the bridge, illegal in the real
    game (#26). Brain is frozen as the baseline; not fixed.
 
-Next, cheapest first:
-1. Score futures by what happened, not the value head: tower HP dealt - taken + elixir difference,
-   look-ahead ~10-15 s so pushes land. One benchmark (~20 min) answers it.
-2. Search chooses only WHICH play; the model keeps deciding WHEN.
-3. Retrain the value head on simulator games (r3 vs r3 self-play: exact outcomes, no drift, our levels).
-   Same machinery starts R4 (self-play RL).
-4. Then honest search: `--vs sample:`, then hidden-information search for the phone (R2).
+Next (updated 2026-11-14):
+1. DONE (#30): futures scored by what happened (towers + material), model decides when, 12 s look-ahead.
+   Best player: `./bench search:models/r3.pt --vs models/r3.pt --score outcome --timing model --horizon 12`.
+2. Tracked-opponent search, still in the sim: rollouts start from what the phone would know: the
+   opponent's elixir COUNTED (capped at 10 continuously; fix `Match.enemy_elixir` / `observe` too) and
+   hand TRACKED through the cycle; sample only cards not seen yet. Measure the drop from 84.5%.
+3. R2: the phone bridge (board from the screen -> `reset(spawns=...)`), with reliable enemy-card
+   recognition (missed plays break the elixir count and the cycle), then B in Training Camp.
+4. Learned value from simulator self-play (r3 vs r3, exact outcomes) to replace the hand-made score;
+   the same machinery starts R4.
+Not run: variant C (value score + model timing), not needed after B (#30).
 
 ## How we try to beat ClashAI (all decks, not one)
 

@@ -4,9 +4,11 @@ leads to the best position a few seconds later.
     candidates  WAIT + the model's top cards (by the card head), each at its top LEGAL tiles
     rollout     every candidate in its own copy of the battle (engine save/load: an exact copy),
                 then HORIZON seconds with the model playing BOTH sides (greedy, every 0.5 s)
-    score       the model's value head (win probability) for us at the end; a finished match
-                scores 1 / 0.5 / 0
+    score       "value": the model's value head (win probability) for us at the end; a finished
+                match scores 1 / 0.5 / 0. "outcome": what actually happened (see outcome()).
     choose      the best score (WAIT on ties: it is listed first)
+    timing      "search": WAIT is a candidate, search decides when AND what. "model": the model's
+                gate decides WHEN (as without search); search only picks WHICH play.
 
 Why it helps: the imitation model decides in one glance and is weakest at timing (play/wait 70%,
 docs/experiments.md #27). Search checks "what happens if I play this now vs wait" instead of guessing.
@@ -21,7 +23,7 @@ import numpy as np
 import royalesim
 import torch
 
-from bot.sim import TICKS_PER_S, TILE, W_TILES
+from bot.sim import TICKS_PER_S, TILE, W_TILES, Sim
 from tools.build_dataset import ABILITY_SLOT, observe, own_frame
 
 OK = royalesim.DEPLOY_REASONS.index("OK")
@@ -112,17 +114,21 @@ class Policy:
 
 
 class Search:
-    def __init__(self, policy, cards=2, tiles=2, horizon_s=6.0, think=10):
-        self.p, self.cards, self.n_tiles = policy, cards, tiles
+    TOWER_W, MATERIAL_W, END_W = 1.0, 0.1, 3.0       # outcome(): 10 elixir of material ~ one tower
+
+    def __init__(self, policy, cards=2, tiles=2, horizon_s=6.0, think=10, score="value", timing="search"):
+        assert score in ("value", "outcome") and timing in ("search", "model")
+        self.p, self.cards, self.n_tiles, self.score, self.timing = policy, cards, tiles, score, timing
+        self.count = {i: (row[3] or 1) for i, row in enumerate(Sim().catalogue)}
         self.horizon, self.think = int(horizon_s * TICKS_PER_S), think
         self.clones = []
         self.calls = self.ms = 0.0
         self.fallbacks = 0
 
-    def candidates(self, battle, st, side, seen, spent):
+    def candidates(self, battle, st, side, seen, spent, wait=True):
         pl = st["players"][side]
         out = self.p.forward([(st, side, seen, spent)] * 4, chosen_slot=torch.arange(4))
-        cands, n = [None], 0
+        cands, n = [None] if wait else [], 0
         for slot in out["card"][0].argsort(descending=True).tolist():
             if n == self.cards:
                 break
@@ -139,9 +145,15 @@ class Search:
     def choose(self, battle, st, side, seen, spent_by):
         """battle: the live royalesim.Battle (not modified). seen: {side: set} cards each side saw
         the other play; spent_by: [milli, milli] elixir each side publicly spent."""
-        cands = self.candidates(battle, st, side, seen[side], spent_by[1 - side])
-        if len(cands) == 1:
-            return None
+        if self.timing == "model":
+            out = self.p.forward([(st, side, seen[side], spent_by[1 - side])])
+            if self.p.greedy(battle, st, side, out, 0) is None:      # the model says: not now
+                return None
+            cands = self.candidates(battle, st, side, seen[side], spent_by[1 - side], wait=False)
+        else:
+            cands = self.candidates(battle, st, side, seen[side], spent_by[1 - side])
+        if len(cands) <= 1:
+            return cands[0] if cands else None
         snap = battle.save()
         while len(self.clones) < len(cands):
             self.clones.append(royalesim.Battle(card_names=None, slot_of_k=[[0, 1, 2], [0, 1, 2]]))
@@ -173,6 +185,10 @@ class Search:
                     self._note(r, c, rr, hand)
         scores = []
         ends = [(r, r.get("over") or json.loads(r["b"].state_json())) for r in runs if r["ok"]]
+        if self.score == "outcome":
+            it = iter(ends)
+            scores = [self.outcome(st, next(it)[1], side) if r["ok"] else -1e9 for r in runs]
+            return cands[int(np.argmax(scores))]
         values = self.p.forward([(s, side, r["seen"][side], r["spent"][1 - side]) for r, s in ends])["value"] if ends else []
         k = 0
         for r in runs:
@@ -186,6 +202,27 @@ class Search:
                 scores.append(torch.sigmoid(values[k]).item())
             k += 1
         return cands[int(np.argmax(scores))]
+
+    def material(self, st, team):
+        """Elixir in the bank + the elixir worth of the team's living units (card cost shared by the
+        card's units, times the HP fraction left)."""
+        F, total = FIELDS, st["players"][team]["elixir_milli"] / 1000
+        for e in st["entities"]:
+            if e[F["team"]] != team or e[F["tower_slot"]] >= 0 or e[F["hp"]] <= 0:
+                continue
+            cid = e[F["card_id"]]
+            total += self.p.cost.get(cid, 0) / self.count.get(cid, 1) * e[F["hp"]] / max(1, e[F["max_hp"]])
+        return total
+
+    def outcome(self, st0, st1, side):
+        """What happened between st0 and st1, for `side`: tower HP dealt - taken (1 = a whole tower)
+        + MATERIAL_W x the material lead at the end; a finished match is +-END_W (draw 0)."""
+        if st1["game_over"]:
+            return self.END_W if st1["winner"] == side else -self.END_W if st1["winner"] in (0, 1) else 0.0
+        lost = lambda team: sum((a - b) / max(1, m) for a, b, m in zip(
+            st0["players"][team]["tower_hp"], st1["players"][team]["tower_hp"], st1["players"][team]["tower_max_hp"]))
+        return (self.TOWER_W * (lost(1 - side) - lost(side))
+                + self.MATERIAL_W * (self.material(st1, side) - self.material(st1, 1 - side)))
 
     def _note(self, r, c, res, hand):
         """Public bookkeeping after an accepted play: the other side saw the card, elixir spent."""

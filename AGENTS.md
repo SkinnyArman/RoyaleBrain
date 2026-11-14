@@ -32,7 +32,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # once
 ./train                                     # train RoyaleBrain (r3, 44k steps, Mac GPU); progress bar, Ctrl+C saves, rerun continues
 ./train --status                            # how far training is + last held-out scores
 ./bench models/r3.pt --vs models/r3.pt     # SB scoreboard: our deck vs 200 held-out pro decks, model-played (reacts), equal levels (#28)
-./bench search:models/r3.pt --vs models/r3.pt   # same, with decision-time search (R6, bot/search.py, #29)
+./bench search:models/r3.pt --vs models/r3.pt --score outcome --timing model --horizon 12   # best search so far (#30)
 .venv/bin/python -m tools.sim_watch --open # play a battle in RoyaleSim and watch it (video in sims/)
 ./tvroyale 10                               # from the main page: record 10 TV Royale replays (both sides)
 .venv/bin/python -m tools.battlelog         # true results + both decks for recent runs (needs .env)
@@ -72,6 +72,14 @@ elixir and cycle, HP, ETAs, statistics over many games).
 - **Cards are numbers, never names, inside the model** (owner: "I can't give you every variation";
   there are 120+ cards). Every card enters as its stats; patterns must transfer between cards and the
   input size must not grow with the number of cards.
+- **The opponent's elixir and hand are TRACKED, not guessed** (owner, 2026-11-14). Elixir: both
+  start at 5, regen is public (x2 / x3 later), subtract the cost of every play seen, and cap at 10 at
+  every moment (elixir over 10 is lost; a count capped only at the end is wrong). Hand: the cycle is
+  fixed (a played card goes to the back of the queue), so every play seen narrows it, and once all 8
+  cards are seen the 4 in hand and the next card are KNOWN. Unknown only: cards not seen yet (early
+  match) and plays our vision missed or misread. Search, the opponent model (`bot/opponent.py`) and
+  the phone bridge must use this; sample only the slots still unknown. Missed detections are the real
+  risk: enemy-card recognition (R2) is what makes the tracking exact.
 - The rule brain (`bot/brain.py`) is frozen: it is the live baseline and the benchmark opponent.
 - Removed 2026-11-10 as obsolete: the outcome scorer trained on our own matches (features.py,
   outcomes.py, placements.py, train_policy.py, BlendPolicy, backfill, ./note) and the old

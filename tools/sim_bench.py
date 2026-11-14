@@ -115,7 +115,8 @@ class ModelPlayer:
     """The trained model, greedy (bot/search.Policy). With search=True it tries its best few moves
     in copies of the battle first (bot/search.Search, R6)."""
 
-    def __init__(self, path, gate=GATE, search=False, horizon=6.0, sample_seed=None):
+    def __init__(self, path, gate=GATE, search=None, sample_seed=None):
+        """search: None, or Search options {horizon_s, score, timing} (bot/search.py)."""
         import torch
         from bot.model import RoyaleBrain
         from bot.search import Policy, Search
@@ -126,7 +127,7 @@ class ModelPlayer:
         model.eval()
         rng = np.random.default_rng(sample_seed) if sample_seed is not None else None
         self.policy = Policy(model, Sim().cost, gate, rng)
-        self.search = Search(self.policy, horizon_s=horizon) if search else None
+        self.search = Search(self.policy, **search) if search is not None else None
         self.name = ("search_" if search else "sample_" if rng is not None else "") + Path(path).stem
 
     def act(self, sim, st, side, match):
@@ -267,7 +268,7 @@ class RulePlayer:
         return [(side, slot, int(tx * TILE), int(ty * TILE))]
 
 
-def make_player(spec, seed, sim, gate=GATE, horizon=6.0):
+def make_player(spec, seed, sim, gate=GATE, search=None):
     if spec == "random":
         return RandomPlayer(random.Random(seed))
     if spec == "rules":
@@ -275,7 +276,7 @@ def make_player(spec, seed, sim, gate=GATE, horizon=6.0):
     if spec.startswith("sample:"):
         return ModelPlayer(spec.removeprefix("sample:"), gate, sample_seed=seed)
     if spec.startswith("search:"):
-        return ModelPlayer(spec.removeprefix("search:"), gate, search=True, horizon=horizon)
+        return ModelPlayer(spec.removeprefix("search:"), gate, search=search or {})
     return ModelPlayer(spec, gate)
 
 
@@ -283,7 +284,7 @@ def make_player(spec, seed, sim, gate=GATE, horizon=6.0):
 def play_match(job):
     """job: (index, payload_json, pro_side, player spec, opponent spec, gate, video path or None,
     real_levels)."""
-    i, payload_json, pro_side, player_spec, vs_spec, gate, video, real_levels, horizon = job
+    i, payload_json, pro_side, player_spec, vs_spec, gate, video, real_levels, search = job
     payload = json.loads(payload_json)
     sim, rng = Sim(), random.Random(i)
     mapper = Mapper(sim)
@@ -302,7 +303,7 @@ def play_match(job):
                 levels=[[OUR_LEVELS.get(k, 14) for k in our_keys], [e["level"] for e in entries]] if real_levels
                 else [[EQUAL_LEVEL] * 8, [EQUAL_LEVEL] * 8],
                 tower_levels=[OUR_TOWER_LEVEL, pl["tower_card"]["level"]] if real_levels else [EQUAL_LEVEL] * 2)
-    ours = make_player(player_spec, i, sim, gate, horizon)
+    ours = make_player(player_spec, i, sim, gate, search)
     if vs_spec == "replay":
         theirs = ReplayPlayer(payload, pro_side, mapper, random.Random(i + 10**6))
     else:
@@ -416,6 +417,8 @@ def main():
     ap.add_argument("--gate", type=float, default=GATE, help="model players: play when the gate logit is above this")
     ap.add_argument("--video", type=int, default=0, help="also render the first N matches to sims/")
     ap.add_argument("--horizon", type=float, default=6.0, help="search: seconds each candidate is played forward")
+    ap.add_argument("--score", default="value", choices=("value", "outcome"), help="search: how a future is scored (bot/search.py)")
+    ap.add_argument("--timing", default="search", choices=("search", "model"), help="search: who decides WHEN to play")
     ap.add_argument("--real-levels", action="store_true", help=f"our real levels vs the pro's (default: all at {EQUAL_LEVEL})")
     a = ap.parse_args()
     for spec in (a.player, a.vs):
@@ -425,13 +428,16 @@ def main():
         raise SystemExit("the rule brain only plays our deck: use it as the player, not --vs")
     print(f"loading {a.matches} held-out matches...", flush=True)
     games = held_out(a.matches)
-    stamp, label = time.strftime("%Y%m%d-%H%M%S"), ("search_" if a.player.startswith("search:") else "") + Path(a.player).stem + ("_real" if a.real_levels else "")
-    jobs = []
+    searching = a.player.startswith("search:")
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    label = (("search_" if searching else "") + Path(a.player).stem
+             + (f"_{a.score}_{a.timing}_{a.horizon:g}s" if searching else "") + ("_real" if a.real_levels else ""))
+    jobs, sopts = [], dict(horizon_s=a.horizon, score=a.score, timing=a.timing)
     for i, (pj, side) in enumerate(games):
         video = ROOT / "sims" / f"bench_{stamp}_{label}_{i}.mp4" if i < a.video else None
         if video:
             video.parent.mkdir(exist_ok=True)
-        jobs.append((i, pj, side, a.player, a.vs, a.gate, video, a.real_levels, a.horizon))
+        jobs.append((i, pj, side, a.player, a.vs, a.gate, video, a.real_levels, sopts))
     counter, results, t0 = Value("q", 0), [], time.time()
     tty = sys.stdout.isatty()
     pool = Pool(a.workers, initializer=_init, initargs=(counter,))
@@ -449,7 +455,7 @@ def main():
                     f"won {wins}/{len(results)}  elapsed {_hms(el)}  ETA {_hms(eta)}")
             if tty:
                 print("\r\033[K" + line, end="", flush=True)
-            elif time.time() - last > 30:
+            elif time.time() - last > 10:
                 print(line, flush=True)
                 last = time.time()
         for p in pending:
@@ -467,7 +473,7 @@ def main():
     d = sum(r["winner"] not in (0, 1) for r in results)
     lo, hi = wilson(w, n)
     mean = lambda k: sum(r[k] for r in results) / max(1, n)
-    summary = dict(player=a.player, vs=a.vs, matches=n, wins=w, draws=d, losses=n - w - d,
+    summary = dict(player=a.player, vs=a.vs, search=sopts if searching else None, matches=n, wins=w, draws=d, losses=n - w - d,
                    win_rate=round(w / max(1, n), 4), win_ci95=[round(lo, 3), round(hi, 3)],
                    crowns_for=round(sum(r["crowns"][0] for r in results) / max(1, n), 3),
                    crowns_against=round(sum(r["crowns"][1] for r in results) / max(1, n), 3),
