@@ -596,3 +596,64 @@ rollout policy is the same model family as the opponent. Correction (owner): on 
 mostly TRACKABLE, not hidden: elixir = public count of seen plays (capped at 10 at every moment),
 hand = known once all 8 cards were played (fixed cycle), narrowed before that. Truly unknown: unseen
 cards early in the match and plays our vision misses (AGENTS.md).
+
+## #31  2026-11-15  Opponent elixir count capped at every moment (step 1a)
+
+Bug: the public count of the enemy's elixir (dataset builder `observe`, benchmark, search) was
+5 + all regen - all spent, capped at 10 only at the end. A player who waits a minute at full and then
+plays a 4 has 6; the old count said 10 (shown before the fix). The live bot was already right
+(bot/economy.py caps every frame).
+Fix: `tools.build_dataset.ElixirCount` (5 at the start, regen x2 from 2:00, minus each play seen,
+capped at 10 at every play), used by observe, the benchmark's Match and the search rollouts.
+tests/test_elixir_count.py (start, leak at full, double elixir). Not rebuilt: the training data and r3
+still use the old count; the next dataset build uses the fixed one.
+Scoreboard rerun (vs r3, same 200 matches, level 14): r3 105/200 = 52.5% (draws 29, was 24),
+search A 168/200 = 84.0% (crowns 1.62-0.41). Same win rates as before: the matches play out a bit
+differently, the results don't move. Fine to have, not a source of strength.
+
+## #32  2026-11-15  Opponent cycle tracking, verified against the engine (step 1b)
+
+bot/opponent.Opponent gained (additive; the frozen brain's calls behave as before):
+- `queue()`: their 4-card queue = their last 4 plays, oldest first; early in the match the front is
+  unknown (cards not played yet), a missed play is unknown too. `next_card()` = queue[0].
+- `certain_hand()`: seen cards not in the queue, only when every queue slot is known (4+ plays, none
+  missed); `unknown_hand_slots()` = 4 - that.
+- `sample(rng, pool)`: one (hand, queue) consistent with everything seen, unseen deck cards drawn from
+  a pool, for the search (1c). Exact when nothing is unknown.
+Verified (tests/test_opponent_cycle.py): RoyaleSim red plays 30 random cards; after every play our
+next card = the engine's, and once all 8 cards are seen our certain hand = the engine's exact hand.
+The cycle rule in the file's docstring was "unverified": it is now.
+Found on the way:
+- Bug: `played()` used `if card:`, so an engine card id 0 never entered the deck (live uses names, so
+  only the sim was affected). Fixed (`is not None`).
+- The engine leaves a hand slot empty (-1) for a moment after a play, until the next card slides in
+  (the real game's short delay). Code reading hands must allow for it.
+
+## #33  2026-11-15  Honest search: only what we could know about the opponent (steps 1c + 1d)
+
+bot/search.Hidden rewrites each search copy before the rollouts: the opponent's elixir = our
+ElixirCount (#31), their hand and queue = Opponent.sample() from the cycle tracker (#32): exact once
+all 8 cards are seen and no recent play was missed, otherwise unseen slots get cards they haven't
+shown (uniform over the catalogue), which also replace the unseen cards in their deck list (level =
+median of their known cards, base form). Our own side and the board stay exact.
+How: snapshots are JSON; hand/queue use the engine's INTERNAL card ids (79 of 145 differ from the
+catalogue ids; table built at start, 0.5 s); load() refuses an edited snapshot (stored state_hash),
+and the refusal names the rebuilt hash, so a deliberate edit loads on the second try (the engine
+still rebuilds and checks the whole state). +~11 ms per searched decision (16.6 ms average).
+Tests: tests/test_hidden.py (real battle untouched, counted elixir, unseen real cards only by chance,
+exact copy once everything is known). `./bench search:models/r3.pt --score outcome --timing model
+--horizon 12 --honest`. Same 200 matches, equal levels:
+
+| opponent | plain r3 | search, sees everything | **search, honest** |
+|---|---|---|---|
+| r3 (greedy) | 52.5% | 84.0% | **73.5%** (67-79%), crowns 1.43-0.58 |
+| sample:r3 (unpredictable) | 61.5% | 84.5% | **81.0%** (75-86%), crowns 1.49-0.46 |
+
+Match by match: honest vs plain r3: 68-26 (vs r3) and 57-18 (vs sample), both p < 1e-5.
+Honest vs sees-everything: 19-40 vs r3 (p = 0.009: knowing a DETERMINISTIC opponent's exact hand let
+the full search predict its replies), 24-31 vs sample:r3 (p = 0.42: no clear cost).
+So against an opponent it can't predict anyway, playing honestly costs little; the search keeps a
++20-point gain over plain r3 using only what a player could know. (Plain r3 vs sample:r3 was measured
+before the elixir-count fix, #31; vs r3 it did not change with the fix.)
+Next to try: a prior for unseen cards (the 251k replays' deck statistics instead of uniform over all
+145 cards); several guesses per decision averaged.

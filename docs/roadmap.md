@@ -82,8 +82,7 @@ Shortcomings, most important first:
    hand and elixir. On the phone it must rebuild the board from what is seen (`reset(spawns=...)`), with
    the opponent's elixir COUNTED from seen plays (capped at 10 continuously) and the hand TRACKED
    through the cycle (exact once all 8 cards are seen); only unseen cards are sampled. Not built.
-   Also fix: the sim's public elixir count (`Match.enemy_elixir`, build_dataset.observe) caps only at
-   the end, not continuously.
+   The elixir-count cap bug is fixed (#31).
 3. **The benchmark opponent is the search's own rollout policy** (deterministic r3), so rollouts
    predict its replies exactly. Use `--vs sample:models/r3.pt` (seeded sampling) for honest numbers
    once search helps; not run at full scale yet.
@@ -99,8 +98,10 @@ Next (updated 2026-11-14):
 1. DONE (#30): futures scored by what happened (towers + material), model decides when, 12 s look-ahead.
    Best player: `./bench search:models/r3.pt --vs models/r3.pt --score outcome --timing model --horizon 12`.
 2. Tracked-opponent search, still in the sim: rollouts start from what the phone would know: the
-   opponent's elixir COUNTED (capped at 10 continuously; fix `Match.enemy_elixir` / `observe` too) and
-   hand TRACKED through the cycle; sample only cards not seen yet. Measure the drop from 84.5%.
+   opponent's elixir COUNTED (capped at 10 continuously: DONE 2026-11-15, #31) and
+   hand TRACKED through the cycle (tracker DONE 2026-11-15: `Opponent.queue/certain_hand/sample`, #32);
+   sample only cards not seen yet. DONE 2026-11-15 (#33): honest search 73.5% vs r3, 81.0% vs
+   sample:r3 (plain r3 52.5% / 61.5%). Possible next: a deck prior for unseen cards; several guesses averaged.
 3. R2: the phone bridge (board from the screen -> `reset(spawns=...)`), with reliable enemy-card
    recognition (missed plays break the elixir count and the cycle), then B in Training Camp.
 4. Learned value from simulator self-play (r3 vs r3, exact outcomes) to replace the hand-made score;

@@ -45,8 +45,9 @@ import numpy as np
 import pyarrow.parquet as pq
 import royalesim
 
+from bot.opponent import Opponent
 from bot.sim import ENGINE_NAME, H_TILES, OUR_DECK, OUR_LEVELS, TICKS_PER_S, TILE, W_TILES, Sim
-from tools.build_dataset import (ABILITY_SLOT, Mapper, ability_button, observe, own_frame, REGEN_MILLI_PER_TICK)
+from tools.build_dataset import ABILITY_SLOT, ElixirCount, Mapper, ability_button, own_frame
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC, OUT = ROOT / "datasets" / "il_replay", ROOT / "runs" / "bench"
@@ -78,12 +79,11 @@ class Match:
     """Shared, public per-match facts the players may use: cards each side has SEEN the other play,
     elixir each side has publicly spent (for the enemy-elixir count)."""
     def __init__(self):
-        self.seen, self.spent = [set(), set()], [0, 0]
+        self.seen, self.count = [set(), set()], [ElixirCount(), ElixirCount()]
+        self.cycle = [Opponent(), Opponent()]     # each side's plays as the other side tracks them
 
     def enemy_elixir(self, tick, side):
-        double_from = 2 * 60 * TICKS_PER_S
-        regen = REGEN_MILLI_PER_TICK * (min(tick, double_from) + 2 * max(0, tick - double_from))
-        return max(0.0, min(10.0, (5000 + regen - self.spent[1 - side]) / 1000))
+        return self.count[1 - side].value(tick) / 1000
 
 
 # ---------------------------------------------------------------- players
@@ -115,7 +115,9 @@ class ModelPlayer:
     """The trained model, greedy (bot/search.Policy). With search=True it tries its best few moves
     in copies of the battle first (bot/search.Search, R6)."""
 
-    def __init__(self, path, gate=GATE, search=None, sample_seed=None):
+    _hidden = None                                    # bot.search.Hidden, built once per process (0.5 s)
+
+    def __init__(self, path, gate=GATE, search=None, sample_seed=None, seed=0):
         """search: None, or Search options {horizon_s, score, timing} (bot/search.py)."""
         import torch
         from bot.model import RoyaleBrain
@@ -127,7 +129,15 @@ class ModelPlayer:
         model.eval()
         rng = np.random.default_rng(sample_seed) if sample_seed is not None else None
         self.policy = Policy(model, Sim().cost, gate, rng)
+        search = dict(search) if search is not None else None
+        honest = search.pop("honest", False) if search else False
         self.search = Search(self.policy, **search) if search is not None else None
+        if honest:
+            from bot.search import Hidden
+            if ModelPlayer._hidden is None:
+                ModelPlayer._hidden = Hidden(Sim())
+            self.rng = random.Random(seed)                # guesses for the opponent's unseen cards
+        self.honest = honest
         self.name = ("search_" if search else "sample_" if rng is not None else "") + Path(path).stem
 
     def act(self, sim, st, side, match):
@@ -136,7 +146,8 @@ class ModelPlayer:
         if self.search:
             t0 = time.perf_counter()
             try:
-                c = self.search.choose(sim.b, st, side, match.seen, match.spent)
+                hidden = (ModelPlayer._hidden, match.cycle[1 - side], self.rng) if self.honest else None
+                c = self.search.choose(sim.b, st, side, match.seen, match.count, hidden)
                 self.search.ms += 1000 * (time.perf_counter() - t0)
                 self.search.calls += 1
                 return [c] if c else []
@@ -144,7 +155,7 @@ class ModelPlayer:
                 # RoyaleSim 0.1.51 cannot reload some snapshots with a Bowler on the board ("snapshot
                 # entity tables are inconsistent", ~0.2% of decisions, #29): play the plain model's move
                 self.search.fallbacks += 1
-        out = self.policy.forward([(st, side, match.seen[side], match.spent[1 - side])])
+        out = self.policy.forward([(st, side, match.seen[side], match.count[1 - side])])
         c = self.policy.greedy(sim.b, st, side, out, 0)
         return [c] if c else []
 
@@ -276,7 +287,7 @@ def make_player(spec, seed, sim, gate=GATE, search=None):
     if spec.startswith("sample:"):
         return ModelPlayer(spec.removeprefix("sample:"), gate, sample_seed=seed)
     if spec.startswith("search:"):
-        return ModelPlayer(spec.removeprefix("search:"), gate, search=search or {})
+        return ModelPlayer(spec.removeprefix("search:"), gate, search=search or {}, seed=seed)
     return ModelPlayer(spec, gate)
 
 
@@ -331,11 +342,12 @@ def play_match(job):
             if slot < ABILITY_SLOT:
                 cid = hand[side][slot]
                 match.seen[1 - side].add(cid)
-                match.spent[side] += 1000 * sim.cost[cid]
+                match.count[side].spend(st["tick"], 1000 * sim.cost[cid])
+                match.cycle[side].played(cid)
                 if frames:
                     log.append(f"{'blue' if side == 0 else 'red'}: {sim.name(cid)}")
             else:
-                match.spent[side] += 1000                     # ability presses cost ~1 elixir (GK); public estimate
+                match.count[side].spend(st["tick"], 1000)     # ability presses cost ~1 elixir (GK); public estimate
         n = STEP - (1 if cmds else 0)
         if frames:
             for _ in range(n):
@@ -419,6 +431,8 @@ def main():
     ap.add_argument("--horizon", type=float, default=6.0, help="search: seconds each candidate is played forward")
     ap.add_argument("--score", default="value", choices=("value", "outcome"), help="search: how a future is scored (bot/search.py)")
     ap.add_argument("--timing", default="search", choices=("search", "model"), help="search: who decides WHEN to play")
+    ap.add_argument("--honest", action="store_true",
+                    help="search: the copies hold only what we could know (opponent elixir counted, hand tracked)")
     ap.add_argument("--real-levels", action="store_true", help=f"our real levels vs the pro's (default: all at {EQUAL_LEVEL})")
     a = ap.parse_args()
     for spec in (a.player, a.vs):
@@ -431,8 +445,8 @@ def main():
     searching = a.player.startswith("search:")
     stamp = time.strftime("%Y%m%d-%H%M%S")
     label = (("search_" if searching else "") + Path(a.player).stem
-             + (f"_{a.score}_{a.timing}_{a.horizon:g}s" if searching else "") + ("_real" if a.real_levels else ""))
-    jobs, sopts = [], dict(horizon_s=a.horizon, score=a.score, timing=a.timing)
+             + (f"_{a.score}_{a.timing}_{a.horizon:g}s" + ("_honest" if a.honest else "") if searching else "") + ("_real" if a.real_levels else ""))
+    jobs, sopts = [], dict(horizon_s=a.horizon, score=a.score, timing=a.timing, honest=a.honest)
     for i, (pj, side) in enumerate(games):
         video = ROOT / "sims" / f"bench_{stamp}_{label}_{i}.mp4" if i < a.video else None
         if video:

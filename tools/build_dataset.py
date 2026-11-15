@@ -82,6 +82,29 @@ class Mapper:
         return None, form
 
 
+class ElixirCount:
+    """One side's elixir as the OTHER side can count it: 5 at the start, public regen (x2 from 2:00;
+    overtime ignored), minus the cost of every play seen, CAPPED AT 10 AT EVERY MOMENT (elixir over 10
+    is lost). The old count (5 + all regen - all spent, capped once at the end) said 10 for a player
+    who waited a minute at full and then played a 4 (truth: 6) (AGENTS.md, 2026-11-15)."""
+    DOUBLE_FROM = 2 * 60 * TICKS_PER_S
+
+    def __init__(self):
+        self.milli, self.tick = 5000.0, 0
+
+    def _regen(self, t0, t1):
+        d = self.DOUBLE_FROM
+        return REGEN_MILLI_PER_TICK * (max(0, min(t1, d) - min(t0, d)) + 2 * max(0, max(t1, d) - max(t0, d)))
+
+    def value(self, tick):
+        """Elixir (milli) at `tick` (>= the last play). Regen only adds between plays, so capping
+        at the end of each stretch is the same as capping continuously."""
+        return min(10000.0, self.milli + self._regen(self.tick, tick))
+
+    def spend(self, tick, milli):
+        self.milli, self.tick = max(0.0, self.value(tick) - milli), tick
+
+
 def own_frame(x, y, side):
     """Engine tiles -> the actor's frame (own king at the bottom = low y)."""
     return (x, y) if side == 0 else (W_TILES - x, H_TILES - y)
@@ -99,8 +122,8 @@ def ability_features(me):
     return out + [len(abilities) / 3]
 
 
-def observe(sim, st, side, seen, enemy_spent, F):
-    """One sample's inputs from `side`'s point of view."""
+def observe(sim, st, side, seen, enemy_count, F):
+    """One sample's inputs from `side`'s point of view. enemy_count: the enemy's ElixirCount."""
     me, them = st["players"][side], st["players"][1 - side]
     tick = st["tick"]
     king = own_frame(9.0, 3.0, 0)
@@ -123,9 +146,7 @@ def observe(sim, st, side, seen, enemy_spent, F):
     for team in (side, 1 - side):
         hp, mx = st["players"][team]["tower_hp"], st["players"][team]["tower_max_hp"]
         towers += [h / max(1, m) for h, m in zip(hp, mx)]          # king, princess, princess
-    double_from = 2 * 60 * TICKS_PER_S                               # x2 elixir in the last minute
-    regen = REGEN_MILLI_PER_TICK * (min(tick, double_from) + 2 * max(0, tick - double_from))
-    enemy_elixir = max(0.0, min(10.0, (5000 + regen - enemy_spent) / 1000))  # public count, approx.
+    enemy_elixir = enemy_count.value(tick) / 1000                    # public count (ElixirCount)
     scalars = np.array([tick / (3 * 60 * TICKS_PER_S), me["elixir_milli"] / 10000, enemy_elixir / 10,
                         *towers, me["crowns"] / 3, them["crowns"] / 3, float(st["overtime"]),
                         *ability_features(me)],
@@ -180,7 +201,7 @@ def build_replay(sim, mapper, payload, F):
                     key=lambda e: e["replay_tick_20hz"])
     rows, pending, i = [], [], 0
     seen = [set(), set()]                # cards each side has seen the OTHER side play
-    spent = [0, 0]                       # elixir (milli) each side has publicly spent
+    counts = [ElixirCount(), ElixirCount()]   # each side's elixir as the other side can count it
     last_play = [0, 0]
     rejected = accepted = 0
     while True:
@@ -216,11 +237,11 @@ def build_replay(sim, mapper, payload, F):
         for side in (0, 1):
             if tick - last_play[side] >= WAIT_EVERY_S * TICKS_PER_S and not any(c[0] == side for c in cmds) \
                     and not any((0 if e["side"] == "team" else 1) == side for e, _ in keep):
-                rows.append((*observe(sim, st, side, seen[side], spent[1 - side], F), -1, -1.0, -1.0,
+                rows.append((*observe(sim, st, side, seen[side], counts[1 - side], F), -1, -1.0, -1.0,
                              result[side], real[side], real[1 - side], side, tick, rejected))
                 last_play[side] = tick
         for side, slot, x, y, ev, t0, cid, cost in cmds:
-            obs = observe(sim, st, side, seen[side], spent[1 - side], F)
+            obs = observe(sim, st, side, seen[side], counts[1 - side], F)
             if cid is None:                                     # ability press: no position
                 rows.append((*obs, ABILITY_SLOT, -1.0, -1.0, result[side], real[side], real[1 - side],
                              side, tick, rejected))
@@ -235,7 +256,7 @@ def build_replay(sim, mapper, payload, F):
                     accepted += 1
                     if c[6] is not None:
                         seen[1 - c[0]].add(c[6])
-                    spent[c[0]] += c[7]
+                    counts[c[0]].spend(tick, c[7])
                     last_play[c[0]] = tick
                 else:
                     rejected += 1

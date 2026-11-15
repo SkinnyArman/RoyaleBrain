@@ -14,10 +14,13 @@ Why it helps: the imitation model decides in one glance and is weakest at timing
 docs/experiments.md #27). Search checks "what happens if I play this now vs wait" instead of guessing.
 
 The engine is deterministic and both rollout players are greedy, so one rollout per candidate gives
-the same answer as many. The copy is exact, including the opponent's hand and elixir: in the
-simulator the search knows what the phone could not (docs/experiments.md #29).
+the same answer as many. By default the copy is exact, including the opponent's hand and elixir.
+With `hidden` (Hidden below) the copy holds only what a player could know: the opponent's elixir as
+COUNTED and their hand/queue as TRACKED through the cycle, unseen cards guessed (AGENTS.md, #33).
 """
+import copy
 import json
+import re
 
 import numpy as np
 import royalesim
@@ -39,8 +42,8 @@ class Policy:
         self.model, self.cost, self.gate, self.rng = model, cost, gate, rng
 
     def forward(self, items, chosen_slot=None):
-        """items: [(state, side, cards seen by side, elixir the enemy spent)]. One batched call."""
-        obs = [observe(None, st, side, seen, spent, FIELDS) for st, side, seen, spent in items]
+        """items: [(state, side, cards seen by side, the enemy's ElixirCount)]. One batched call."""
+        obs = [observe(None, st, side, seen, count, FIELDS) for st, side, seen, count in items]
         m = self.model
         cols = [torch.from_numpy(np.stack([o[k] for o in obs]).astype(dt))
                 for k, dt in enumerate((np.int64, np.float32, np.float32, np.int64, np.int64))]
@@ -113,6 +116,69 @@ class Policy:
         return legal[self._sample(logits)]
 
 
+def _load_edited(battle, d):
+    """Load an edited snapshot. A snapshot stores its own state hash and load() refuses a mismatch;
+    the refusal names the hash the engine rebuilt, so a deliberate edit loads on the second try (the
+    engine still rebuilds and checks the whole state; we only confirm the edit was intended)."""
+    try:
+        battle.load(json.dumps(d).encode())
+    except ValueError as e:
+        m = re.search(r"rebuilt (0x[0-9a-f]+)", str(e))
+        if not m:
+            raise
+        d["state_hash"] = int(m.group(1), 16)
+        battle.load(json.dumps(d).encode())
+
+
+class Hidden:
+    """Rewrites a battle copy so the opponent holds only what we could know about them:
+      elixir     their ElixirCount (5 + public regen - plays seen, capped at 10 at every moment)
+      hand/queue Opponent.sample(): exact once all 8 cards are seen and no recent play was missed;
+                 otherwise unknown slots get cards they haven't shown (uniform over the catalogue)
+      deck       the guessed cards replace the unseen ones (level: their known cards' median; base form)
+    Everything on the board stays as it is (the phone sees it)."""
+
+    def __init__(self, sim):
+        self.name = {i: row[0] for i, row in enumerate(sim.catalogue)}
+        self.pool = list(self.name)
+        self.internal = self._internal_ids(sim)
+        self.base = royalesim.Battle(card_names=None, slot_of_k=[[0, 1, 2], [0, 1, 2]])
+
+    @staticmethod
+    def _internal_ids(sim):
+        """Catalogue id -> the id the snapshot uses for hands and queues (they differ for some cards).
+        With shuffle=0 the first deck card is the first hand card."""
+        b, out = royalesim.Battle(card_names=None, slot_of_k=[[0, 1, 2], [0, 1, 2]]), {}
+        fill = [sim.card_id(k)[0] for k in ("knight", "archers", "giant", "musketeer", "fireball", "arrows",
+                                             "skeletons", "goblin_barrel", "valkyrie")]
+        for cid in range(len(sim.catalogue)):
+            deck = [cid] + [f for f in fill if f != cid][:7]
+            try:
+                b.reset(seed=0, decks=[deck, deck], shuffle=0, start_tick=0, elixir_milli=[5000, 5000],
+                        tower_hp=None, spawns=[])
+            except Exception:
+                continue                                  # not a deck card on its own
+            out[cid] = json.loads(b.save())["players"][0]["hand"][0]
+        return out
+
+    def snapshot(self, battle, opp, tracker, count, tick, rng):
+        d = json.loads(battle.save())
+        hand, queue = tracker.sample(rng, [c for c in self.pool if c in self.internal])
+        names = [self.name[c] for c in hand + queue]
+        deck, levels, forms = d["decks"][opp], d["deck_levels"][opp], d["forms"][opp]
+        guesses = [n for n in names if n not in deck]
+        level = sorted(levels)[len(levels) // 2]
+        for i, n in enumerate(deck):
+            if n not in names:                            # a card we haven't seen: replaced by a guess
+                deck[i], levels[i], forms[i] = guesses.pop(), level, 0
+        p = d["players"][opp]
+        p["hand"] = [self.internal[c] for c in hand]
+        p["queue"] = [self.internal[c] for c in queue]
+        p["mana"] = int(count.value(tick) * d["mana_unit"] / 1000)
+        _load_edited(self.base, d)
+        return self.base.save()
+
+
 class Search:
     TOWER_W, MATERIAL_W, END_W = 1.0, 0.1, 3.0       # outcome(): 10 elixir of material ~ one tower
 
@@ -125,9 +191,9 @@ class Search:
         self.calls = self.ms = 0.0
         self.fallbacks = 0
 
-    def candidates(self, battle, st, side, seen, spent, wait=True):
+    def candidates(self, battle, st, side, seen, count, wait=True):
         pl = st["players"][side]
-        out = self.p.forward([(st, side, seen, spent)] * 4, chosen_slot=torch.arange(4))
+        out = self.p.forward([(st, side, seen, count)] * 4, chosen_slot=torch.arange(4))
         cands, n = [None] if wait else [], 0
         for slot in out["card"][0].argsort(descending=True).tolist():
             if n == self.cards:
@@ -142,25 +208,31 @@ class Search:
             n += 1
         return cands
 
-    def choose(self, battle, st, side, seen, spent_by):
+    def choose(self, battle, st, side, seen, counts, hidden=None):
         """battle: the live royalesim.Battle (not modified). seen: {side: set} cards each side saw
-        the other play; spent_by: [milli, milli] elixir each side publicly spent."""
+        the other play; counts: [ElixirCount, ElixirCount], each side's elixir as the other counts it.
+        hidden: None (the copy is exact) or (Hidden, the opponent's Opponent tracker, rng): the copy
+        then holds only what we could know about the opponent."""
         if self.timing == "model":
-            out = self.p.forward([(st, side, seen[side], spent_by[1 - side])])
+            out = self.p.forward([(st, side, seen[side], counts[1 - side])])
             if self.p.greedy(battle, st, side, out, 0) is None:      # the model says: not now
                 return None
-            cands = self.candidates(battle, st, side, seen[side], spent_by[1 - side], wait=False)
+            cands = self.candidates(battle, st, side, seen[side], counts[1 - side], wait=False)
         else:
-            cands = self.candidates(battle, st, side, seen[side], spent_by[1 - side])
+            cands = self.candidates(battle, st, side, seen[side], counts[1 - side])
         if len(cands) <= 1:
             return cands[0] if cands else None
-        snap = battle.save()
+        if hidden:
+            h, tracker, rng = hidden
+            snap = h.snapshot(battle, 1 - side, tracker, counts[1 - side], st["tick"], rng)
+        else:
+            snap = battle.save()
         while len(self.clones) < len(cands):
             self.clones.append(royalesim.Battle(card_names=None, slot_of_k=[[0, 1, 2], [0, 1, 2]]))
         runs = []
         for c, b in zip(cands, self.clones):
             b.load(snap)
-            r = {"b": b, "seen": {0: set(seen[0]), 1: set(seen[1])}, "spent": list(spent_by), "ok": True}
+            r = {"b": b, "seen": {0: set(seen[0]), 1: set(seen[1])}, "count": copy.deepcopy(counts), "ok": True}
             hand = [p["hand"] for p in st["players"]]
             res = b.step([c] if c else [], 1)
             if c:
@@ -172,7 +244,7 @@ class Search:
             if not live:
                 break
             sts = [json.loads(r["b"].state_json()) for r in live]
-            items = [(s, sd, r["seen"][sd], r["spent"][1 - sd]) for r, s in zip(live, sts) for sd in (0, 1)]
+            items = [(s, sd, r["seen"][sd], r["count"][1 - sd]) for r, s in zip(live, sts) for sd in (0, 1)]
             out = self.p.forward(items)
             for j, (r, s) in enumerate(zip(live, sts)):
                 if s["game_over"]:
@@ -189,7 +261,7 @@ class Search:
             it = iter(ends)
             scores = [self.outcome(st, next(it)[1], side) if r["ok"] else -1e9 for r in runs]
             return cands[int(np.argmax(scores))]
-        values = self.p.forward([(s, side, r["seen"][side], r["spent"][1 - side]) for r, s in ends])["value"] if ends else []
+        values = self.p.forward([(s, side, r["seen"][side], r["count"][1 - side]) for r, s in ends])["value"] if ends else []
         k = 0
         for r in runs:
             if not r["ok"]:
@@ -232,6 +304,6 @@ class Search:
         if slot < ABILITY_SLOT:
             card = hand[side][slot]
             r["seen"][1 - side].add(card)
-            r["spent"][side] += 1000 * self.p.cost[card]
+            r["count"][side].spend(res[2], 1000 * self.p.cost[card])
         else:
-            r["spent"][side] += 1000
+            r["count"][side].spend(res[2], 1000)

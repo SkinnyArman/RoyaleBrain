@@ -5,8 +5,11 @@ Sources of card knowledge (most to least reliable):
 2. Later: a detector that names enemy units/spells from the frames.
 Without names, plays are still counted for the cycle (each play moves their queue by one).
 
-Cycle rule (Clash Royale, unverified): 4 cards in hand, a played card goes to the back of a
-4-card queue, so it cannot be played again until 4 other cards have been played after it.
+Cycle rule: 4 cards in hand, a played card goes to the back of a 4-card queue, so it cannot be
+played again until 4 other cards have been played after it. Verified against RoyaleSim's hands
+(tests/test_opponent_cycle.py, 2026-11-15). So the queue = their last 4 plays, and once all 8 cards
+are seen (and no recent play was missed) their hand and next card are KNOWN (AGENTS.md).
+Cards may be names (live) or engine card ids (simulator): anything hashable.
 """
 import math
 
@@ -31,7 +34,7 @@ class Opponent:
 
     def played(self, card=None):
         self.plays.append(card)
-        if card:
+        if card is not None:                   # (an engine card id can be 0)
             self.deck.add(card)
 
     # --- how this opponent answers our attacks, learned during the match (owner: "they defended the
@@ -63,6 +66,41 @@ class Opponent:
         Exact once all 8 cards are known and every play is identified (owner: "predict what they
         play next"). Unknown plays (None) still move the cycle."""
         return [c for c in self.deck if self.may_have_in_hand(c)]
+
+    def queue(self):
+        """Their 4-card queue, oldest first (queue[0] comes back next) = their last 4 plays. Early in
+        the match the front holds cards they haven't played yet; a missed play is None too."""
+        last = self.plays[-4:]
+        return [None] * (4 - len(last)) + last
+
+    def next_card(self):
+        """The card that enters their hand after their next play; None until it is known."""
+        return self.queue()[0]
+
+    def certain_hand(self):
+        """Cards we KNOW are in their hand: seen and not in the queue. Only when every queue slot is
+        known (4+ plays, none missed): otherwise a seen card may be the unknown queue card."""
+        q = self.queue()
+        return [] if None in q else [c for c in self.deck if c not in q]
+
+    def unknown_hand_slots(self):
+        return 4 - len(self.certain_hand())
+
+    def sample(self, rng, pool):
+        """One (hand, queue) consistent with everything seen, for search: the deck's unseen cards are
+        drawn from `pool` (catalogue cards), the queue's unknown slots from the cards not placed yet
+        (its front, early in the match, only from cards never played). Exact when nothing is unknown."""
+        q = list(self.queue())
+        deck = list(self.deck)[:8]
+        deck += rng.sample([c for c in pool if c not in self.deck], 8 - len(deck))
+        free = [c for c in deck if c not in q]
+        never_played = 4 - len(self.plays[-4:])        # front slots: cards not played yet
+        for i, c in enumerate(q):
+            if c is None:
+                options = [x for x in free if i >= never_played or x not in self.plays] or free
+                q[i] = rng.choice(options)
+                free.remove(q[i])
+        return free, q
 
     def may_have_any(self, prop_name):
         """Could any card currently possible in their hand have this property? With an unknown
