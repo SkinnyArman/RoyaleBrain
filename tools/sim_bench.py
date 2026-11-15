@@ -46,7 +46,7 @@ import pyarrow.parquet as pq
 import royalesim
 
 from bot.opponent import Opponent
-from bot.sim import ENGINE_NAME, H_TILES, OUR_DECK, OUR_LEVELS, TICKS_PER_S, TILE, W_TILES, Sim
+from bot.sim import ENGINE_NAME, H_TILES, OUR_DECK, OUR_LEVELS, TICKS_PER_S, TILE, W_TILES, Sim, to_px, to_tile
 from tools.build_dataset import ABILITY_SLOT, ElixirCount, Mapper, ability_button, own_frame
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -62,17 +62,6 @@ MIN_REAL_TICKS = 3 * 60 * TICKS_PER_S - 100          # benchmark matches: the re
 # 0.5 s decision rate vs the dataset's wait sampling) it never played. Tune with --gate.
 GATE = 0.0
 OK = royalesim.DEPLOY_REASONS.index("OK")
-
-
-# ---------------------------------------------------------------- screen <-> tiles (rule brain only)
-# Fitted to bot/layout.py anchors (towers, river) vs the engine's tower centres: x exact, y about
-# +-50 px (1 tile), because layout's tower points are sprite centres, not footprints.
-def to_px(tx, ty):
-    return 16.4 + 58.2 * tx, 1739.8 - 46.95 * ty
-
-
-def to_tile(px, py):
-    return (px - 16.4) / 58.2, (1739.8 - py) / 46.95
 
 
 class Match:

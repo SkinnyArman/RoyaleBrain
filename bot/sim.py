@@ -30,6 +30,34 @@ OUR_LEVELS = {"witch": 14, "golden_knight": 13, "ram": 13, "poison": 11, "log": 
               "hog": 12, "minions": 13}                  # owner's Battle Log, 2026-11-08
 
 
+# Phone screen (1080x2400 px, bot/layout.py) <-> engine tiles, our side (blue) at the bottom.
+# x: fitted on the princess towers (tile 3.5 -> 220 px, 14.5 -> 860 px).
+# y, piecewise (2026-11-15; a single straight fit put tile row 14 IN the river on screen, y 1059):
+#   our half   tile rows 0.5..14.5 -> layout.OUR_DEPLOY_Y 1700..1120 (the measured drop area)
+#   river      tiles 15..17 -> 1100..1035
+#   their half tile 17 -> 1035 (river top), 25.5 -> 580 (their princess towers, layout.TOWERS)
+_Y = [(0.5, 1700.0), (14.5, 1120.0), (15.0, 1100.0), (17.0, 1035.0), (25.5, 580.0)]
+
+
+def to_px(tx, ty):
+    return 16.4 + 58.2 * tx, _interp(ty, _Y)
+
+
+def to_tile(px, py):
+    return (px - 16.4) / 58.2, _interp(py, [(b, a) for a, b in reversed(_Y)])
+
+
+def _interp(v, pts):
+    """Piecewise linear through pts (sorted by first value), extended past both ends."""
+    if v <= pts[0][0]:
+        (a0, b0), (a1, b1) = pts[0], pts[1]
+    elif v >= pts[-1][0]:
+        (a0, b0), (a1, b1) = pts[-2], pts[-1]
+    else:
+        (a0, b0), (a1, b1) = next((p, q) for p, q in zip(pts, pts[1:]) if p[0] <= v <= q[0])
+    return b0 + (b1 - b0) * (v - a0) / (a1 - a0)
+
+
 @dataclass
 class Unit:
     uid: int

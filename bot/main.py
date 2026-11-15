@@ -40,8 +40,11 @@ ROOT = Path(__file__).resolve().parent.parent     # no in-match screen for this 
 
 
 def make_policy(args, brain):
-    """The rule brain: the live baseline until a replay/simulator-trained policy replaces it
-    (docs/roadmap.md). The old outcome-scorer blend was removed 2026-11-10."""
+    """--model <checkpoint>: the trained model plays (bot/live_model.py, R2). Otherwise the rule
+    brain, the live baseline. The old outcome-scorer blend was removed 2026-11-10."""
+    if args.model:
+        from .live_model import ModelPolicy
+        return ModelPolicy(args.model, brain.opponent, gate=args.gate)
     return RulePolicy(brain)
 
 
@@ -67,6 +70,8 @@ def main():
                     help="watch the owner play: never tap, log their plays as training data")
     ap.add_argument("--frames", help="replay a recorded run's frames offline instead of the phone")
     ap.add_argument("--serial", help="adb serial; default: the first physical (non-emulator) device")
+    ap.add_argument("--model", help="play with a trained model checkpoint (e.g. models/r3.pt) instead of the rule brain")
+    ap.add_argument("--gate", type=float, default=0.0, help="--model: play when the gate logit is above this")
     args = ap.parse_args()
 
     templates = vision.load_templates()
@@ -153,7 +158,7 @@ def main():
                 ally_points = static_ally.update(raw_ally, t0)
                 towers = tower_memory.update(vision.tower_hp(img), t0)
                 enemy_elixir.update(t0, elixir, we_spent=spent)
-                plays = tracker.update(points, t0)
+                plays = [g for g in tracker.update(points, t0) if not tracker_mod.is_spawn(g, tracker.tracks, t0)]
                 enemy_plays_seen += len(plays)
                 for g in plays:
                     enemy_elixir.enemy_played(t0, note=f"{len(g)} units at ({int(g[0].x)},{int(g[0].y)})")
@@ -179,7 +184,8 @@ def main():
                                     opponent.note_response(ours, t.card)
                     if t.card and t.play_index is not None and opponent.identify(t.play_index, t.card):
                         # correct the elixir estimate: the play was counted at the average cost
-                        enemy_elixir.value = max(0.0, enemy_elixir.value + UNKNOWN_COST - CARDS[t.card]["cost"])
+                        enemy_elixir.value = max(0.0, enemy_elixir.value + UNKNOWN_COST
+                                             - CARDS.get(t.card, {}).get("cost", UNKNOWN_COST))
                         print(f"  enemy played {t.card}", flush=True)
                 if ready:
                     rec.save_enemy_units(t0, img, ready)

@@ -35,6 +35,7 @@ CARDS = {
     # --- Devil's deck (practice opponent, owner 2026-11-09): evo_barbarians, hero_wizard, boss_bandit,
     #     musketeer, spear_goblins, dark_prince, valkyrie, miner ---
     "evo_barbarians": C(cost=5, kind="troop", swarm=True, sturdy=True, source="owner"),
+    "evo_witch":      C(cost=5, kind="troop", splash=True, hits_air=True, ranged=True, source="owner"),
     # Hero Wizard: Wizard stats + ability (Fiery Flight / Fire Wings: flies, rains fire). Unverified details.
     "hero_wizard":    C(cost=5, kind="troop", splash=True, hits_air=True, ranged=True, hero=True, source="community"),
     # Boss Bandit: 6-elixir champion, ground only, dashes (invulnerable while dashing); ability 1 elixir,
@@ -86,6 +87,7 @@ CARDS = {
     "goblins":        C(cost=2, kind="troop", swarm=True, source="community"),
     "skeleton_army":  C(cost=3, kind="troop", swarm=True, source="community"),
     "minion_horde":   C(cost=5, kind="troop", air=True, hits_air=True, ranged=True, swarm=True, source="community"),
+    "skeleton_dragons": C(cost=4, kind="troop", splash=True, air=True, hits_air=True, ranged=True, swarm=True, source="community"),
     "bats":           C(cost=2, kind="troop", air=True, hits_air=True, swarm=True, source="community"),
 
     # --- spells ---
@@ -93,6 +95,8 @@ CARDS = {
     "rocket":         C(cost=6, kind="spell", splash=True, source="community"),
     "arrows":         C(cost=3, kind="spell", splash=True, source="community"),
     "zap":            C(cost=2, kind="spell", splash=True, source="community"),
+    "giant_snowball": C(cost=2, kind="spell", splash=True, source="community"),
+    "void":           C(cost=3, kind="spell", source="community"),
     "lightning":      C(cost=6, kind="spell", source="community"),
     "goblin_barrel":  C(cost=3, kind="spell", swarm=True, source="community"),
 }

@@ -11,6 +11,20 @@ from .cards import CARDS
 
 MATCH_PX = 90        # max movement between frames to count as the same unit
 GROUP_PX = 260       # new bars this close together on the same frame = one play
+SPAWN_PX = 140       # ~2.5 tiles: a small group appearing this close to a unit already on the field...
+SPAWN_MAX_UNITS = 4  # ...of at most this many units is a spawn (Witch's skeletons...), not a card play
+SPAWN_PARENT_S = 1.5 # the unit it came from has been on the field at least this long
+
+
+def is_spawn(group, tracks, now):
+    """New units that came out of a unit already on the field (the Witch's skeletons, a Tombstone's)
+    cost no elixir and move no cycle: they must not count as plays (owner 2026-11-15: 50 "plays" in a
+    match with ~20 real ones). Big drops (Skeleton Army) and units appearing on their own (Mega
+    Knight) are plays. Cost: a real play placed within ~2.5 tiles of their own unit is missed."""
+    if len(group) > SPAWN_MAX_UNITS:
+        return False
+    return any(t not in group and now - t.born >= SPAWN_PARENT_S and math.dist((t.x, t.y), (g.x, g.y)) <= SPAWN_PX
+               for g in group for t in tracks)
 LOST_AFTER = 0.6     # seconds without a match before a track is dropped
 REAPPEAR_S = 2.0     # a new unit near a track lost this recently is the same unit coming back
 REAPPEAR_PX = 160

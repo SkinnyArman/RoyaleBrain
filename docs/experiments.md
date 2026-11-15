@@ -657,3 +657,75 @@ So against an opponent it can't predict anyway, playing honestly costs little; t
 before the elixir-count fix, #31; vs r3 it did not change with the fix.)
 Next to try: a prior for unseen cards (the 251k replays' deck statistics instead of uniform over all
 145 cards); several guesses per decision averaged.
+
+## #34  2026-11-15  R2 v1: the model on the phone; first opponent deck learned
+
+Opponent (Training Camp practice, owner): Golden Knight, Mega Knight (evo), Witch (evo), Giant
+Snowball, Skeleton Dragons, Void, Skeleton Army, Minion Horde. Added to bot/cards.py: giant_snowball,
+void, skeleton_dragons, evo_witch. tools/label_run takes --deck for matches the battle log doesn't list.
+Match 1 (owner plays, `./watch 1`, run 20261115-112539): 95 crops; owner corrected my guesses (red =
+opponent, blue = ours; the red knight is a normal Mega Knight; evo Mega Knight = purple bits on the
+hands; mixed crops of their and our units left out). 42 crops added (skeleton_dragons 10, mega_knight
+5, golden_knight 8, evo_witch 4, minion_horde 1, skeletons 14). Leave-one-out on this deck's cards:
+54% among all classes, 72% when restricted to the 8 known cards.
+bot/live_model.ModelPolicy (`./play --model models/r3.pt`): live State -> the training observation
+(unknown enemy cards = UNKNOWN as in training), gate/card/tile from r3, legal tiles from the engine on
+a board with the real tower state, tile -> screen pixel. Decides every 0.5 s, not within 1 s of its
+last play. No search yet (needs the whole board rebuilt in the sim).
+Offline check (`--frames` of match 1): fixed on the way
+- our card keys ('ram', 'hog') were looked up with the replay-name mapper -> crash on every card
+  play, only the ability got through: now bot/sim.ENGINE_NAME first;
+- the straight screen<->tile fit put tile row 14 IN the river on screen (y 1059): bot/sim.to_px/to_tile
+  are now piecewise (our half = layout.OUR_DEPLOY_Y 1700..1120, their towers at 580);
+- a recognised 'skeletons' unit crashed the elixir correction (not a card key): guarded.
+After: 0 errors, all troop drops on our side, Poison on their tower.
+KNOWN PROBLEM for match 3: every new group of enemy units counts as a "play", including Witch-spawned
+skeletons (and other spawns): 50 "plays" in a match with ~20 real ones -> enemy elixir estimate and
+cycle are wrong. The rule bot had the same flaw.
+
+## #35  2026-11-15  Phone matches 2-3 (r3, no search) and the fixes between them
+
+Match 2 (run 20261115-114941): lost at 1:38. Owner: Log and Poison "completely illogical". Found:
+- Poison on OUR tower at 0:14: r3 saw only our Witch + skeletons at our tower (99% Poison). Pros
+  Poison their own half 16% of the time (defending), so the model reacts to "units bunched at my
+  tower + tower damage" without telling ours from theirs (unknown-ally ids were not the cause:
+  tested). Also: no enemies seen at all, because vision blanked a big box around their towers.
+- Log to the wrong lane: a spell flash was tracked as an enemy for a frame.
+Fixes: enemy-tower mask narrowed to the banners/archer (the old box hid real units in front);
+model sees only enemy tracks seen in 3+ frames; spell guard (Poison only where it hits a confirmed
+enemy or their tower, Log only with an enemy in its path; if the model's favourite tile hits nothing
+it waits); spawns (<= 4 units appearing within 2.5 tiles of a unit already on the field) are not
+plays. Owner corrected me: Mega Knight is a play (it always counted).
+Match 3 (run 20261115-120115): lost 1-3 at 2:20, took their right tower; owner: "better than the
+last 2". Still: Logged minions twice (recognition named only Golden Knight, so it couldn't know
+they fly) -> Log now ignores air units it can name. Enemy plays counted: 54 (too many: the spawn
+rule isn't enough). Owner: Void = red thing dropping from the sky leaving a hole (spells are not
+seen by vision yet); the opponent's plays show only their level, no name.
+Observation: their Skeleton Army skeletons are level 13, the Witch's skeletons level 15: the badge
+level separates a play from a spawn (vision doesn't read the digits yet).
+Labelling round 2 (owner answered only the unsure pictures): +68 crops. Recognition on this
+opponent's cards, no deck given: 54% -> 71% (all classes); 81% if restricted to their 8.
+Weak: Mega Knight 0/5, Minion Horde 1/5, evo Witch 3/8 (few pictures).
+
+## #36  2026-11-15  Phone matches 4-5 and the spell-guard tweaks
+
+Match 4 (run 20261115-121938): lost, 1:08. Owner: it Logged the weaker side (one unit near our left
+tower) instead of the Witch + skeletons, and opened with a Poison for no reason (0:04, no enemy
+units: the guard allowed their healthy tower as a target). Fixes: a tower counts as a spell target
+on its own only below 30% (a finish); among the model's top 12 tiles a spell goes where it hits the
+most targets. Replays: no 0:04 Poison, the ~0:40 Log goes to the Witch + skeletons.
+Match 5 (run 20261115-122231): lost, 1:25; owner: "playing good until":
+- it didn't Poison the Minion Horde on our side. Checked: the guard didn't block it; the model only
+  gave Poison <= 35% (preferred Golden Knight / Tombstone / waiting) and the Horde was unrecognised.
+- it spent a card on a nearly dead Witch alone, where our tower would have finished her.
+- Minions placed where one Skeleton Dragons splash wiped them.
+All three are judgment: what search (R6) checks. Owner on hard-coding: the "tower only below 30%"
+rule is wrong when troops are there too -> a standing tower in reach now counts as one more target
+whenever troops are hit too; alone only when low enough to finish.
+Hand-written safety rules in bot/live_model.py (to remove once search runs on the phone): spells
+only where they hit a confirmed enemy; tower alone only as a finish; Log ignores flyers; spell to the
+tile (of the model's top 12) hitting the most.
+Tests: all 73 offline + all simulator/search tests pass.
+NEXT: search on the phone (~1.5-2 h): rebuild the board in the sim from vision (unknown enemies as
+their most likely card, our troops from the dead-reckoned estimates), search picks what/where when
+the model's gate says play, test on the 5 recordings, then a match.

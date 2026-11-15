@@ -34,7 +34,10 @@ TOWER_BAR_MASKS = [(130, 385, 330, 470), (770, 385, 965, 470), (380, 160, 700, 2
 TOWERS = {"enemy_left": (220, 580), "enemy_right": (860, 580),
           "our_left": (220, 1400), "our_right": (860, 1400)}
 TILE_PX = 54                                   # arena ~972px wide / 18 tiles
-ENEMY_TOWER_BODIES = [(140, 440, 330, 720), (750, 440, 940, 720), (380, 240, 700, 420)]  # + king body   # ignored for enemy badges (false hits, run 235339)
+# Ignored for enemy badges: the princess towers' red banners + archer (they look like enemy badges,
+# runs 235339, 20261115-*) and the king body. Narrowed 2026-11-15 from (140, 440, 330, 720): the old box
+# also hid real enemy units standing in front of their towers (the model saw no enemies there).
+ENEMY_TOWER_BODIES = [(130, 480, 340, 565), (740, 480, 950, 565), (380, 240, 700, 420)]
 DEPLOY_X = (50, 1030)                          # playable arena width
 OUR_DEPLOY_Y = (1120, 1700)                    # our side: just below the river .. behind the king
 BACK = {"left": (380, 1640), "right": (700, 1640)}   # behind the king tower, to build a push

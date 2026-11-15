@@ -54,7 +54,7 @@ Principles:
 | **R3** | **First model (imitation + value)**: transformer over units / scalars / hand, cards as stats + identity; heads: wait, card, tile, win probability; enemy ids randomly hidden like live; trained on the Mac GPU | **done**: models/r3.pt, card 64.7%, tile within 1 48.0% held-out (#27) |
 | **SB** | **Sim benchmark**: model plays our deck vs held-out real decks in RoyaleSim, watchable in `tools.sim_watch`; the rule brain is the baseline. Every change must move this number | **done**: r3 47.5% vs rules 30.5% vs random 15% (#27) |
 | **R6** | **Decision-time search** (bot/search.py): copy the battle, play the model's top moves a few seconds forward, keep the best. Main edge over ClashAI | **in progress**: v1 no gain (#29); scored by real outcome: **84.0% vs 52.5%** (#30), not yet tested against an unpredictable opponent. See "Where we stopped" |
-| R2 | Bridge: screen pixels <-> sim tiles; live `State` -> the model's observation; better enemy recognition (search needs the board right) | after R6 |
+| **R2** | **Phone bridge**: `./play --model models/r3.pt` plays live (bot/live_model.py, #34-#36); recognition 71% on the practice deck; spell safety rules as a stopgap | **in progress**: 5 practice matches lost; next: search on the phone |
 | **B** | **Phone benchmark**: fixed Training Camp opponent, 5 matches per version, wins / crowns / tower-damage difference | with R2 |
 | R5 | Deploy: model (+ search) behind our perception/execution; default only if it beats the rule baseline on B | after R2/B |
 | R4 | Self-play RL (PPO) in RoyaleSim vs a pool of real decks, starting from R3; scored in the sim and on B. Needs a rented GPU | later |

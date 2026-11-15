@@ -2,7 +2,10 @@
 
     python -m tools.label_run runs/<id> [k]          -> writes a numbered montage + groups file
     python -m tools.label_run runs/<id> --apply 0=monk 3=firecracker 5=skip ...
-Only cards from that opponent's deck are accepted as labels (no guessing outside the 8).
+    python -m tools.label_run runs/<id> --single --deck golden_knight,mega_knight,...   # no battle log
+Only cards from that opponent's deck are accepted as labels (no guessing outside the 8). The deck
+comes from runs/<id>/battle.json (battle log), or --deck for matches the battle log doesn't list
+(Training Camp, friendly battles): it is then saved to runs/<id>/deck.json for the --apply step.
 """
 import json
 import shutil
@@ -59,14 +62,24 @@ def single(run):
     return len(paths)
 
 
+def their_deck(run):
+    if "--deck" in sys.argv:
+        deck = sys.argv[sys.argv.index("--deck") + 1].split(",")
+        (run / "deck.json").write_text(json.dumps(deck))
+        return deck
+    if (run / "deck.json").exists():
+        return json.loads((run / "deck.json").read_text())
+    return json.loads((run / "battle.json").read_text())["them"]["cards"]
+
+
 def main():
     run = Path(sys.argv[1])
     if "--single" in sys.argv:
         print(f"{single(run)} crops -> {run / 'label_single.png'}")
-        print("their deck:", ", ".join(json.loads((run / "battle.json").read_text())["them"]["cards"]))
+        print("their deck:", ", ".join(their_deck(run)))
         return
     if "--apply-single" in sys.argv:
-        deck = json.loads((run / "battle.json").read_text())["them"]["cards"]
+        deck = their_deck(run)
         allowed = {c.removeprefix("evo_") for c in deck} | set(deck) | {"skeletons"}
         paths = json.loads((run / "label_single.json").read_text())
         n = 0
@@ -82,7 +95,7 @@ def main():
                 n += 1
         print(f"added {n} crops from {run.name}")
         return
-    deck = json.loads((run / "battle.json").read_text())["them"]["cards"]
+    deck = their_deck(run)
     gfile = run / "label_groups.json"
     if "--apply" in sys.argv:
         gs = json.loads(gfile.read_text())

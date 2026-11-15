@@ -24,6 +24,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # once
 .venv/bin/python -m tools.grab --cards      # screenshot + hand-slot crops into shots/
 ./play                                      # wait for a match, play it with the rule brain (baseline), stop at the end
 ./play --dry-run                            # same, but never tap (watch + log only)
+./play --model models/r3.pt                 # the trained model plays (R2 v1, bot/live_model.py); add --dry-run to only log
 ./play --tower-hp 4032                      # optional match info
 ./watch 5                                   # watch the OWNER play 5 real matches (never taps), battle log, report
 .venv/bin/python -m tools.fetch_replays     # download IL_Replay pro replays -> datasets/il_replay (resumable)
