@@ -47,7 +47,7 @@ import royalesim
 
 from bot.opponent import Opponent
 from bot.sim import ENGINE_NAME, H_TILES, OUR_DECK, OUR_LEVELS, TICKS_PER_S, TILE, W_TILES, Sim, to_px, to_tile
-from tools.build_dataset import ABILITY_SLOT, ElixirCount, Mapper, ability_button, own_frame
+from tools.build_dataset import ABILITY_SLOT, ElixirCount, Mapper, ability_button
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC, OUT = ROOT / "datasets" / "il_replay", ROOT / "runs" / "bench"

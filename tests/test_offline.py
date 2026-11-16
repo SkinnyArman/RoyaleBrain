@@ -671,7 +671,9 @@ def test_goblin_barrel_drop_gets_the_log():
 def test_level15_enemy_badge_is_detected():
     """Level-15 badges are orange-red with yellow digits; run 061201 was blind to them."""
     found = vision.enemies(frame_1v1("1v1_level15_prince.jpg"))
-    assert any(abs(x - 268) < 20 and abs(y - 824) < 20 for x, y, _, _ in found)
+    hit = [p for p in found if abs(p[0] - 268) < 20 and abs(p[1] - 824) < 20]
+    assert hit
+    assert hit[0][4] in (15, None)               # its level, read from the badge digits (bot/levels.py)
 
 
 def test_sparky_gets_a_distraction_and_ground_only_threats_get_air():

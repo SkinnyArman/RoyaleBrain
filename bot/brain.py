@@ -50,8 +50,6 @@ DEFENSE_RESERVE = 4   # never attack if it leaves less than this for the next de
                       # attacked down to 0 and had nothing when the real push came)
 TOWER_HANDLES_HP = 0.4  # a lone enemy below this HP fraction is left to the tower
 LEAK_AT = 9.0         # at or above this, playing *something* beats wasting regen
-FINISH_HP = 0.35      # a damaged support unit at or below this is worth a cheap spell (owner: "hit the
-                      # low-HP backup first", e.g. a low Musketeer behind fresh Barbarians)
 SPLASH_REACH_PX = 320 # keep swarm/air-swarm cards this far from known splash units (owner)
 FRAGILE = {"minions"} # our cards that one splash hit wipes out
 TOWER_RANGE_PX = 7.5 * 54     # princess tower range (unverified, 7.5 tiles)

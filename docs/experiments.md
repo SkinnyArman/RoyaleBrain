@@ -729,3 +729,127 @@ Tests: all 73 offline + all simulator/search tests pass.
 NEXT: search on the phone (~1.5-2 h): rebuild the board in the sim from vision (unknown enemies as
 their most likely card, our troops from the dead-reckoned estimates), search picks what/where when
 the model's gate says play, test on the 5 recordings, then a match.
+
+## #37  2026-11-16  Search on the phone (R6 on R2), offline on the 5 practice recordings
+
+Question: can the live board be rebuilt in RoyaleSim fast enough for search to pick the play, and does
+it fix the judgment mistakes of matches 1-5 (#35, #36)?
+Setup: `bot/rebuild.py` turns the live State into a battle via `reset(unit_spawns=...)`: enemy tracks
+(3+ frames) by recognised card, unnamed ones as their most-played troop (else Knight); our troops from
+vision + dead reckoning; tower HP from vision; our elixir from the bar, theirs counted; our hand from
+the screen + our cycle, theirs from `Opponent.sample` (deck order = hand + queue, shuffle 0). When r3's
+gate says play, `Search` (outcome score, 12 s, 2 cards x 2 tiles) picks what + where. No spell guards
+in this path. `./play --model models/r3.pt --search`. Compared with `tools.search_replay` on every
+logged decision where the bot played (73 states), plain r3 + guards vs search.
+Engine notes: a reset takes < 1 ms; ground units can't stand on water (moved to the nearest land
+half-cell); an evolution is named by its unit record ('Witch', 1) or, where that has no form, by the
+card ('Barbarians', 1); a guessed (unread) hand slot is never tapped.
+Found on the way, a vision ghost: the top of OUR princess towers (cannon + red arrow) is read as an
+enemy badge: 4,091 detections in the 2026-11-15 runs, all at full HP, never named; the model saw an
+enemy parked on our tower in ~10% of decision states. Masked (layout.ENEMY_TOWER_BODIES). Also
+suspicious, not fixed: full-HP "enemies" at y~343 behind their princess towers in run 112539.
+Results (offline, same states):
+- Rebuild 0.6-2.4 ms; search 75-300 ms per decision (first ~270 ms, warm-up), ability ~2 ms. Inside
+  the 0.5 s think step, but the frame loop stalls while it runs (sim measured ~17 ms average because
+  most sim decisions have <= 1 candidate).
+- Match 4 0:04 opening Poison on an empty board: search plays Tombstone. Match 2 0:14 Poison on our
+  own tower with no enemy: search plays Minions. Both without the spell guards.
+- Match 5 0:10, 4 unnamed units walking at our left tower: plain played Hog, search Poisons them at
+  (220,1244) (likely the Minion Horde the owner wanted Poisoned). 0:54 Log on one unit: search waits.
+  0:34 Minions into the (unnamed) Skeleton Dragons: search plays Minions too (it can't know the card).
+- Search uses Poison defensively on groups on our side (match 2 0:49, match 3 1:42-1:58).
+Not measured: wins. Offline replays can't play a match forward (frames don't react).
+Decision: ready for a Training Camp match with `--search`; keep the guards in the plain path until the
+phone shows search is at least as good, then remove them (roadmap step 1d). Ideas if slow: fewer
+candidates, shorter horizon, search in a thread so the frame loop keeps running.
+
+## #38  2026-11-16  Match 6: first phone match with search; ghost mask, stand-ins, labelling round 3
+
+Match 6 (run 20261116-005151, `./play --model models/r3.pt --search`, same Training Camp deck): lost,
+both our princess towers down by 2:45, theirs 87% / 96%. No search errors or fallbacks; frame time
+p50 20 ms, p95 72 ms, max 432 ms (search 80-310 ms per decision).
+What went wrong (from log.jsonl):
+- The our-tower ghost (#37) was still there: the red arrow turns with the tower's cannon, so it sat
+  at x 250-270, outside the #37 box. At 0:05-0:06 Witch + Tombstone (8 elixir) went left against it;
+  at 0:13 their Golden Knight + Skeleton Dragons pushed right, we had 4 elixir, search chose a Ram
+  attack, the right tower went 90% -> 16% by 0:28 (down at 1:02).
+- Only the Golden Knight was named as a play, and rebuild v1 made every unnamed enemy their
+  most-played card: every unknown became a Golden Knight in the simulator (Skeleton Dragons as
+  ground melee units).
+- Elixir at 9.9 twice (~0:58, 1:44-1:51): the model's play/wait gate, not search.
+Fixes:
+- Mask over the whole tower top: (140-300 / 780-940, y 1330-1410): 7,997 detections in all
+  2026-11-15/16 runs, all full HP and unnamed; 26 damaged ones (maybe real units) fall inside too.
+- Unnamed enemy stand-in by the size of the play it came with (bot/rebuild.STAND_IN): 1 unit Knight,
+  2 Archer, 3+ Goblin; spawns (no play index: Witch/Tombstone skeletons) as Goblins. Test added.
+- Replay of match 6 with both (tools.search_replay): 0:06 Tombstone vs the ghost -> wait; 0:15 Ram
+  attack -> Minions in front of the right tower (where the push came).
+Labelling round 3 (this match, deck as #35): 55 crops by me, 12 unsure ones answered by the owner.
+Owner's correction: 2 of my "evo Witch" guesses were NORMAL Witches (dark blue-violet, red cape; the
+evo is pink-purple with a gold mask), and so were 3 crops I had labelled evo myself: moved to witch.
+An evo card alternates looks, so this opponent plays both. Older evo Witch crops checked: all evo.
+Leave-one-out on this deck's cards: 114 -> 181 crops; all classes 71% -> 76%, restricted to their
+deck 81% -> 83%. Per card (deck-only): Witch 2/2 -> 7/7, evo Witch 4/8 -> 10/16, Mega Knight 2/5 ->
+6/10, Minion Horde 2/5 -> 9/14, Golden Knight 10/13 -> 15/19.
+CORRECTED in #40: the first "before" numbers here (78% / 83%, "flat") came from a measuring script
+that lined up files in a different order than the recogniser loads them. More pictures do help.
+Seen, not fixed: a track named live only joins the opponent's deck through `Opponent.identify` (a
+play with an unknown card); named tracks without a play index (counted as spawns) never do, so
+Skeleton Dragons / evo Witch (named in 347 / 233 frames) were missing from their deck and cycle.
+
+## #39  2026-11-16  Match 7; enemy levels read from badges; hand reader trusts plays, not greyed art
+
+Match 7 (run 20261116-010917, `--search`): lost 1-3 at 1:48; took their left tower first (0:43,
+down at 1:25), theirs right 64%. Right tower fell 0:35-0:43 to a push over the right bridge while
+search played Hog left with 4 elixir (plain r3: Log). Frame time p50 21 ms, p95 54 ms.
+"Dark Prince" (log, 79 frames): one of their level-15 Minion Horde minions (crop
+00035.41_id143). Live there is no deck restriction, so the nearest picture can be any of 30+ classes;
+the Dark Prince pictures come from an earlier opponent. Not fixed (ideas: restrict to the deck once
+known, a learned recogniser).
+1. Enemy levels READ, not assumed (owner). The rebuild assumed level 13; their badges show 13-15.
+   `bot/levels.py`: inside each badge vision already finds, the white/yellow digit pixels are cropped
+   tightly, resized to 22x16 and matched (nearest neighbour, max distance 6.5) to
+   datasets/badge_levels/<13|14|15|none>/: 392 badges harvested from the enemy crops of all 7 runs,
+   labelled by me (auto-labelled where the match to clean seeds was <= 6.5, the other 151 read by
+   eye; 38 "none" = red cloth / wood that the badge finder took for a badge). Leave-one-out: 190 right,
+   0 wrong, 88 unknown (13: 45/65, 15: 145/170, 14: 0/5 - too few examples; 11, 12, 16 never seen).
+   Each track votes over frames (`Track.level`); the rebuild spawns each enemy at its own level, an
+   unread one at the level read most on this opponent (deck cards: the level read on that card),
+   14 before any read. Replay of match 7: track-frames 15: 568, 13: 97, 14: 19, unread: 460.
+   Cost ~0.4 ms per badge.
+2. Hand reader (vision.HandReader): the same card in two slots in 11-23% of frames of every run,
+   almost always at 0-1 elixir: greyed cards (with the refill sweep animation) matched the wrong
+   template, and a changed slot was always re-matched. Now a slot's card changes only after a play
+   from it (main tells the reader; the empty tray as fallback), or after 3 identical reads while the
+   art is in COLOUR (saturation 75th pct >= 60; greyed 6-15, colour 135+); a duplicate is refused; a
+   slot played from and not read since is None (unknown: never tapped, search guesses it). Also added
+   templates for the evo Ram and the greyed Ram (from unknown_slots; they were never named).
+   All 7 recordings (1,800 frames): duplicate frames 335 -> 0; played card still shown 2.5 s later
+   4/81 -> 0/81; unknown slots 5.6% -> 7.8%.
+Tests: all pass (+ tests/test_levels.py: the level reader is never wrong on its labelled set).
+
+## #40  2026-11-16  Match 8; labelling rounds 4-5; search decides timing in the sim (running)
+
+Match 8 (run 20261116-014718, `--search`, levels read, new hand reader): lost 0-2 at 2:30, theirs
+80% / 37% (our most damage so far). Hand: 0 duplicate frames of 4,200, 5.6% unknown slots. Levels read
+on tracks: 15 (most), 13 (Skeleton Army), 14. Frame time p50 20 ms, p95 90 ms.
+Lost to TIMING: 0:28-0:41 one level-15 enemy took our right tower 65% -> 0 while our elixir went 1 -> 6
+and the model's gate said wait every 0.5 s (search runs only when the gate says play); the left tower
+fell the same way (1:24-1:28). Search also often replaced the model's Hog/Poison with other cards:
+Hog and Poison sat in hand the last minute. Misread: "evo_barbarians" 25 frames (not in their deck).
+Labelling rounds 4-5 (matches 7 and 8): 114 crops added by me (59 + 55), 7 unsure ones held for the
+owner. Recogniser leave-one-out on this deck's cards (295 crops): all classes 80%, restricted to their
+deck 83%. Per card (deck-only): Skeleton Dragons 82/92, Skeletons 94/107, Minion Horde 23/29, Golden
+Knight 18/24, evo Witch 14/23, Witch 8/8, Mega Knight 5/12.
+Search decides timing too (variant B: WAIT is a candidate, the gate is not asked), honest, outcome
+score, 12 s, vs r3, same 200 held-out matches: stopped at 189/200 with 102 won = 54% (model decides
+when: 73.5%, plain r3: 52.5%). Decision: worse; not used on the phone. Likely cause: over a 12 s
+look-ahead, waiting rarely scores worse than playing, so search undervalues playing in time. The
+second run (vs sample:r3) was stopped (the result was already clear; it would slow a live match).
+Phone side built anyway: `./play --model models/r3.pt --search-timing`; search now runs on a worker
+thread (both modes), its answer checked against the current hand and elixir before tapping. Hand
+reader fix: a slot played from whose card is read again steadily in colour (the tap didn't land) is
+trusted again (it stayed unknown forever). All 8 recordings: 0 duplicate frames, 0 stale cards.
+Timing is a MODEL problem (the gate, play/wait 70%, #27): next work is on the model, not search.
+Recogniser cutoff after rounds 3-5 (474 crops, leave-one-out, all classes): max_dist 0.9 answered
+38% at 5.6% wrong (the offline test allows 5%); 0.88: 31% at 3.4% wrong; 0.86: 28% at 1.5%. Set 0.88.

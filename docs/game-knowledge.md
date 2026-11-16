@@ -37,6 +37,9 @@ Approximate level-11 stats (RoyaleAPI `cr-api-data` base stats scaled about 10%/
 
 - A deck has 2 evo slots. After the card has been played N times ("cycles"), the next copy deploys evolved, then the count resets. The card shows a purple diamond frame above it when the evo is ready (seen in screenshots, verified as a UI cue, not yet as "next deploy is evo").
 - **Evo Witch** (1 cycle): every Skeleton that dies near her heals her ~109 HP (lvl 11), ~1s after death. Same base stats.
+- **Evo Witch vs Witch look** (verified: owner, crops of run 20261116-005151, 2026-11-16): the evo is light
+  pink-purple with a gold horned mask; the normal Witch is dark blue-violet with a red cape. An evo card
+  with a 1-play cycle alternates: the same opponent plays both looks in one match.
 - **Evo Battle Ram** (2 cycles): Super Charge. Keeps charging and bouncing off buildings/towers until it dies; ~572 per charge hit, knockback each bounce. Countered by Log, air, ranged units (they reset it).
 - Since Dec 2025 there are also **Heroes** (another upgraded card form). Behaviour unknown to us.
 

@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 
 from . import layout as L
+from . import levels
 
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 
@@ -46,26 +47,70 @@ EMPTY_SLOT_STD = 14   # art-area std-dev below this = empty slot (plain blue tra
 
 class HandReader:
     """hand() with a per-slot cache: a slot is only re-matched when its pixels changed.
-    Matching all templates on all 4 slots every frame cost ~80ms (run 2026-11-08-235339)."""
+    Matching all templates on all 4 slots every frame cost ~80ms (run 2026-11-08-235339).
+
+    A slot's card only changes when we play it: the card leaves (the slot shows the empty tray), the
+    next one slides in. Greying out at low elixir also changes the pixels and the greyed art matched the
+    wrong template: the same card in two slots in 11-23% of frames of every run (experiments #39). So
+    a slot keeps its card unless we played from it (played(), or the empty tray seen), or the new read
+    is the same for STABLE frames in a row while the card is in COLOUR (greyed art, with its refill
+    sweep, is never trusted to change a card); a read that duplicates another slot is refused. A slot
+    played from and not read since is unknown (None), never the card that left."""
     CHANGED = 4.0          # mean abs gray difference that counts as "the slot changed"
+    STABLE = 3
+    GREY_SAT = 60          # art saturation (75th pct): greyed 6-15, in colour 135+ (7 runs, #39)
 
     def __init__(self, templates):
         self.templates = templates
-        self.last = [None] * 4          # (small gray crop, name)
+        self.last = [None] * 4          # (small gray crop, raw read)
+        self.card = [None] * 4          # accepted card per slot
+        self.emptied = [True] * 4       # slot seen empty since its card was accepted
+        self.streak = [(None, 0)] * 4   # (raw read, consecutive frames)
 
     def read(self, img):
         gray = cv2.cvtColor(img[L.SLOT_BOXES[0][1]:L.SLOT_BOXES[0][3]], cv2.COLOR_BGR2GRAY)
-        names = []
+        raw = []
         for i, (x0, y0, x1, y1) in enumerate(L.SLOT_BOXES):
             small = cv2.resize(gray[:, x0:x1], None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
             prev = self.last[i]
             if prev is not None and float(cv2.absdiff(small, prev[0]).mean()) < self.CHANGED:
-                names.append(prev[1])
+                raw.append(prev[1])
                 continue
             name = hand(img, self.templates, slots=[i])[0]
             self.last[i] = (small, name)
-            names.append(name)
-        return names
+            raw.append(name)
+        empty_now = [False] * 4
+        for i, name in enumerate(raw):
+            r, n = self.streak[i]
+            self.streak[i] = (name, n + 1 if name == r else 1)
+            if name is None:
+                if self.last[i] is not None and float(_art(gray[:, L.SLOT_BOXES[i][0]:L.SLOT_BOXES[i][2]]).std()) < EMPTY_SLOT_STD:
+                    self.emptied[i] = empty_now[i] = True   # the tray: a play left this slot
+                continue
+            if name == self.card[i] and not self.emptied[i]:
+                continue
+            others = [c for j, c in enumerate(self.card) if j != i]
+            if name in others:
+                continue                            # one deck card can't sit in two slots
+            x0, _, x1, _ = L.SLOT_BOXES[i]
+            colour = np.percentile(_art(cv2.cvtColor(img[L.SLOT_BOXES[i][1]:L.SLOT_BOXES[i][3], x0:x1],
+                                                     cv2.COLOR_BGR2HSV)[:, :, 1]), 75) >= self.GREY_SAT
+            stable = colour and self.streak[i][1] >= self.STABLE
+            if name == self.card[i]:                # still the card we played from here: the play
+                if stable:                          # didn't happen (missed tap); trust it again
+                    self.emptied[i] = False
+                continue
+            if self.emptied[i] or self.card[i] is None or stable:
+                self.card[i], self.emptied[i] = name, False
+        # a slot played from and not re-read yet holds an unknown card (the greyed newcomer is often
+        # misread as a card of another slot): unknown, not the card that left
+        return [None if e or self.emptied[i] else c for i, (c, e) in enumerate(zip(self.card, empty_now))]
+
+    def played(self, slot):
+        """We just played from this slot: its next card may differ (the exact signal; the empty tray
+        is the fallback, e.g. when the owner plays)."""
+        if slot is not None and 0 <= slot < 4:
+            self.emptied[slot] = True
 
 
 def hand(img, templates, min_score=0.55, slots=(0, 1, 2, 3)):
@@ -179,10 +224,12 @@ def _badges(hsv, team, badge, digits, y0):
         bodies = L.OUR_TOWER_BODIES if team == "ally" else L.ENEMY_TOWER_BODIES
         if any(bx0 <= cx <= bx1 and by0 <= cy <= by1 for bx0, by0, bx1, by1 in bodies):
             continue                                        # tower decorations look like badges
+        # Level from the badge digits (bot/levels.py), enemies only: ours are known (sim.OUR_LEVELS).
+        lv = levels.reader().read(hsv[max(0, y - 3):y + h + 3, max(0, x - 3):x + w + 3]) if team == "enemy" else None
         # Health bar (only when damaged) starts at the badge's right edge, same height.
         strip = hsv[y + h // 4:y + 3 * h // 4, x + w:min(x + w + 170, hsv.shape[1])]
         if strip.size == 0:                                 # badge at the screen edge: no room for a bar
-            out.append((cx, cy, float(w), 1.0))
+            out.append((cx, cy, float(w), 1.0, lv))
             continue
         f = cv2.countNonZero(_in(strip, c["fill"]))
         if team == "enemy":
@@ -191,9 +238,9 @@ def _badges(hsv, team, badge, digits, y0):
         rows = max(1, strip.shape[0])
         bar_w = (f + e) / rows
         if bar_w >= 15:
-            out.append((cx, cy, float(bar_w), round(f / (f + e), 2)))
+            out.append((cx, cy, float(bar_w), round(f / (f + e), 2), lv))
         else:
-            out.append((cx, cy, float(w), 1.0))
+            out.append((cx, cy, float(w), 1.0, lv))
     return out
 
 

@@ -208,12 +208,15 @@ class Search:
             n += 1
         return cands
 
-    def choose(self, battle, st, side, seen, counts, hidden=None):
+    def choose(self, battle, st, side, seen, counts, hidden=None, decided=False):
         """battle: the live royalesim.Battle (not modified). seen: {side: set} cards each side saw
         the other play; counts: [ElixirCount, ElixirCount], each side's elixir as the other counts it.
         hidden: None (the copy is exact) or (Hidden, the opponent's Opponent tracker, rng): the copy
-        then holds only what we could know about the opponent."""
-        if self.timing == "model":
+        then holds only what we could know about the opponent. decided: the caller's gate already
+        said play now (the phone: bot/live_model.py); only pick which play."""
+        if decided:
+            cands = self.candidates(battle, st, side, seen[side], counts[1 - side], wait=False)
+        elif self.timing == "model":
             out = self.p.forward([(st, side, seen[side], counts[1 - side])])
             if self.p.greedy(battle, st, side, out, 0) is None:      # the model says: not now
                 return None

@@ -31,7 +31,6 @@ Output: datasets/samples/shard-XXXXXX-NN.npz, one file per 1,000 replays (git-ig
 import argparse
 import json
 import math
-import random
 import re
 import signal
 import sys

@@ -7,7 +7,6 @@ from just before the play, so the outcome labels and the model treat it exactly 
 """
 from collections import deque
 
-from . import layout as L
 from . import vision
 from .actions import Action, snap
 from .cards import CARDS

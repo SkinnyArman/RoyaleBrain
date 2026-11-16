@@ -44,7 +44,8 @@ def make_policy(args, brain):
     brain, the live baseline. The old outcome-scorer blend was removed 2026-11-10."""
     if args.model:
         from .live_model import ModelPolicy
-        return ModelPolicy(args.model, brain.opponent, gate=args.gate)
+        return ModelPolicy(args.model, brain.opponent, gate=args.gate, search=args.search or args.search_timing,
+                           search_timing=args.search_timing)
     return RulePolicy(brain)
 
 
@@ -71,6 +72,10 @@ def main():
     ap.add_argument("--frames", help="replay a recorded run's frames offline instead of the phone")
     ap.add_argument("--serial", help="adb serial; default: the first physical (non-emulator) device")
     ap.add_argument("--model", help="play with a trained model checkpoint (e.g. models/r3.pt) instead of the rule brain")
+    ap.add_argument("--search", action="store_true",
+                    help="--model: rebuild the board in RoyaleSim and let search pick the play (bot/rebuild.py)")
+    ap.add_argument("--search-timing", action="store_true",
+                    help="--model: search also decides WHEN to play (WAIT is a candidate), implies --search")
     ap.add_argument("--gate", type=float, default=0.0, help="--model: play when the gate logit is above this")
     args = ap.parse_args()
 
@@ -227,6 +232,7 @@ def main():
                     action = (chosen.card, chosen.slot, xy)
                     if not args.dry_run:
                         dev.play(L.SLOTS[chosen.slot], xy)
+                    hand_reader.played(chosen.slot)
                     own.played(chosen.card, xy, t0)
                     spent = COST[chosen.card]
                 if action:
@@ -236,16 +242,20 @@ def main():
                 rec.write(t0, img, {
                     "ms": round(ms, 1), "elixir": elixir, "enemy_elixir": round(enemy_elixir.value, 2),
                     "regen": round(enemy_elixir.rate, 3), "hand": hand,
-                    "tracks": [[t.id, int(t.x), int(t.y), int(t.w), int(t.vy), t.hp, t.card] for t in tracker.tracks],
+                    "tracks": [[t.id, int(t.x), int(t.y), int(t.w), int(t.vy), t.hp, t.card, t.level] for t in tracker.tracks],
                     "enemy_hand": opponent.hand_estimate(),
                     "allies": [[t.id, t.label, int(t.x), int(t.y), t.hp] for t in ally_tracker.tracks],
                     "towers": towers, "champion_ready": champ,
                     "enemy_plays": len(plays),
                     "action": [action[0], [int(v) for v in action[2]] if action[2] else None] if action else None,
+                    "model": getattr(policy, "last_info", None) if action else None,
                 }, force_frame=bool(action or plays))
                 act = ""
                 if action:
                     act = f"  -> {action[0]}" + (f" at {tuple(int(v) for v in action[2])}" if action[2] else "")
+                    info = getattr(policy, "last_info", None)
+                    if info and "search_ms" in info:
+                        act += f"  [search {info['search_ms']}ms rebuild {info['rebuild_ms']}ms {info['units']} units]"
                 if args.verbose or action:
                     clock = t0 - started
                     print(f"{clock:6.1f}s {ms:5.1f}ms elixir={elixir:4.1f} them~{enemy_elixir.value:4.1f} "

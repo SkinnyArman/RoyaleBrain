@@ -102,13 +102,6 @@ class Opponent:
                 free.remove(q[i])
         return free, q
 
-    def may_have_any(self, prop_name):
-        """Could any card currently possible in their hand have this property? With an unknown
-        deck, assume yes (safe default)."""
-        if not self.deck:
-            return True
-        return any(prop(c, prop_name) for c in self.hand_estimate())
-
     def threatening_spells(self):
         return [c for c in SPELL_RADIUS if self.may_have_in_hand(c)]
 

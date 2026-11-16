@@ -1,6 +1,5 @@
 """Leave-one-out accuracy of bot.recognizer on datasets/enemy_units. Run: python -m tools.eval_recognizer"""
 import collections
-from pathlib import Path
 
 import cv2
 

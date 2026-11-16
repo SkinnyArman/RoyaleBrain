@@ -131,3 +131,4 @@ def unit_value(card):
     """Elixir value of one unit of a card (Barbarians: 5 elixir / 5 units = 1 each)."""
     p = profile(card)
     return p["cost"] / max(1, p["count"])
+

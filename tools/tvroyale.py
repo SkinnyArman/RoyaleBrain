@@ -11,7 +11,6 @@ Processing (both sides' plays -> training data) is separate: tools.tv_extract (n
 Screen positions measured on the owner's phone (1080x2400), 2026-11-09. The arena shown is whatever
 TV Royale opens on (the owner set Arena 24).
 """
-import hashlib
 import json
 import subprocess
 import sys
@@ -20,7 +19,6 @@ from pathlib import Path
 
 import cv2
 
-from bot import vision
 from bot.fastdevice import FastDevice
 from bot.main import phone_serial
 
@@ -29,21 +27,13 @@ OUT = ROOT / "datasets" / "tv"
 FPS = 8
 MENU = (982, 290)
 TV_ROYALE = (646, 511)
-WATCH_Y = [1171, 1697]          # Watch buttons of the first two entries on the list
 WATCH_X = 898
-ENTRY_H = 526                   # list entry height (px)
-ENTRY_TOP = 735                 # first entry's top edge
 MAX_REPLAY_S = 330              # 3 min + overtime + loading
 END_GRACE_S = 4.0               # no in-match screen this long = replay over
 
 
 def adb(*args):
     subprocess.run(["adb", "-s", SERIAL, "shell", *args], capture_output=True)
-
-
-def entry_crop(img, i):
-    y0 = ENTRY_TOP + i * ENTRY_H
-    return img[y0:y0 + ENTRY_H - 40, 40:1040]
 
 
 def in_replay(img, tpl):

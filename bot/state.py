@@ -51,10 +51,6 @@ class State:
     def to_dict(self):
         return asdict(self)
 
-    @property
-    def double_elixir(self):
-        return self.regen > 0.5
-
 
 def build_state(t, elixir, enemy_elixir, hand, opponent, tracker, ally_tracker, towers,
                 champion_ready, own, now):

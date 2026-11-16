@@ -25,6 +25,8 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # once
 ./play                                      # wait for a match, play it with the rule brain (baseline), stop at the end
 ./play --dry-run                            # same, but never tap (watch + log only)
 ./play --model models/r3.pt                 # the trained model plays (R2 v1, bot/live_model.py); add --dry-run to only log
+./play --model models/r3.pt --search        # + search: live board rebuilt in RoyaleSim (bot/rebuild.py) picks the play (#37)
+.venv/bin/python -m tools.search_replay runs/<id>   # offline: plain model vs search on a match's logged decisions
 ./play --tower-hp 4032                      # optional match info
 ./watch 5                                   # watch the OWNER play 5 real matches (never taps), battle log, report
 .venv/bin/python -m tools.fetch_replays     # download IL_Replay pro replays -> datasets/il_replay (resumable)
@@ -49,9 +51,17 @@ levels 11-16, incl. spawned units, evolutions, hero forms; decoded from the game
 MIT: download its sdist from PyPI and run `.venv/bin/python -m tools.build_card_levels
 <sdist>/data/derived/cards-<newest>.json`; checked against statsroyale in tests/test_card_levels.py). `bot/profiles.py` reads it.
 
-Growing the enemy recogniser: after a match, look at `runs/<id>/enemy_units/*.png`, copy clear
-crops into `datasets/enemy_units/<card_name>/` (names = keys in `bot/cards.py`), then run
-`.venv/bin/python -m tools.eval_recognizer` and record the leave-one-out result in experiments.md.
+Growing the enemy recogniser (the routine used with the owner, 2026-11-15):
+1. After a match: `.venv/bin/python -m tools.label_run runs/<id> --single --deck <their 8 card keys>`
+   (Training Camp isn't in the battle log, so pass `--deck`; it is saved for the apply step).
+2. Look at `runs/<id>/label_single.png` yourself and guess every crop. Red badges/tint = THEIR units,
+   blue = ours; use the scene too: a unit hitting OUR tower (blue banners) is theirs, don't ask (owner); skip crops where ours and theirs mix, keep crops where one unit of theirs is the subject.
+   Evolutions look different (evo Witch: light pink-purple, gold horned mask; the normal Witch: dark
+   blue-violet, red cape, and an evo deck plays BOTH looks; evo Mega Knight: purple bits on the hands).
+3. Show the owner ONLY the crops you are unsure of, in one image, SORTED BY NUMBER low to high, your
+   guess under each, open it for them (`open <png>`), and list the numbers in the question.
+4. Apply: `... label_run runs/<id> --apply-single <card>=1,2,3 <card>=...`, then measure (leave-one-out,
+   all classes and restricted to their deck) and record it in experiments.md.
 
 The phone must show up in `adb devices`. Device: Galaxy S20 FE, 1080x2400. All coordinates are
 in that resolution; another phone needs recalibration (see docs/calibration.md).
@@ -92,6 +102,16 @@ See docs/roadmap.md. Next: verify RoyaleSim (our deck loads, speed, one of our r
 replayed) and the IL_Replay data, then benchmark (B), replay -> simulator pipeline, imitation, RL.
 
 ## Rules for agents
+
+Owner's working preferences (keep to them):
+- **No hard-coding of play decisions.** The bot must learn (model, search). Temporary safety rules
+  only with the owner's OK, marked as temporary, and removed when search can judge the same thing.
+- Long jobs get a command with a live progress bar, safe Ctrl+C and resume (`./build`, `./train`,
+  `./bench`); when running something for the owner, log to a file they can `tail -f`
+  (`runs/bench/live.log`).
+- Test on recordings (`bot.main --frames runs/<id>`) before asking the owner to play a match.
+- Matches only in Training Camp / practice. Commit only when asked ("commit"), push only when asked.
+- Be honest about results and estimates; short replies.
 
 1. **Knowledge lives in files, not in your head.** Whatever you learn (a measured coordinate, a
    placement that works, a rule that failed), write it into the matching doc in the same change.

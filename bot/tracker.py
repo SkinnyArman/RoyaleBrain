@@ -46,6 +46,8 @@ class Track:
         self.x0, self.y0 = self.x, self.y          # where it first appeared
         self.travelled = 0.0                       # max distance from where it appeared
         self.play_index = None                     # index of the enemy play this unit came from
+        self.levels = {}                           # badge level read -> frames (bot/levels.py)
+        self._vote(p)
 
     def update(self, p, now):
         dt = now - self.seen
@@ -57,7 +59,17 @@ class Track:
         self.travelled = max(self.travelled, math.dist((self.x, self.y), (self.x0, self.y0)))
         if len(p) > 3:
             self.hp = p[3]
+        self._vote(p)
         self.hits += 1
+
+    def _vote(self, p):
+        if len(p) > 4 and p[4] is not None:
+            self.levels[p[4]] = self.levels.get(p[4], 0) + 1
+
+    @property
+    def level(self):
+        """The level read most often on this unit's badge, None if never read."""
+        return max(self.levels, key=self.levels.get) if self.levels else None
 
     @property
     def lane(self):

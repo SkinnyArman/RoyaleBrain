@@ -15,7 +15,6 @@ CHAMPION_BOX = (860, 1790, 1080, 2050)    # search area for templates_ui/champio
 
 # Arena (1v1). The river is around y=1035-1075; our half is below it.
 RIVER_Y = 1080
-OUR_HALF = (RIVER_Y, 1760)        # y range where enemy troops threaten us
 MID_X = 540
 ARENA_Y = (180, 1760)
 # Princess tower HP bars in 1v1: (team, row y, x0, x1) of the bar (crown badge is left of it).
@@ -37,15 +36,18 @@ TILE_PX = 54                                   # arena ~972px wide / 18 tiles
 # Ignored for enemy badges: the princess towers' red banners + archer (they look like enemy badges,
 # runs 235339, 20261115-*) and the king body. Narrowed 2026-11-15 from (140, 440, 330, 720): the old box
 # also hid real enemy units standing in front of their towers (the model saw no enemies there).
-ENEMY_TOWER_BODIES = [(130, 480, 340, 565), (740, 480, 950, 565), (380, 240, 700, 420)]
+ENEMY_TOWER_BODIES = [(130, 480, 340, 565), (740, 480, 950, 565), (380, 240, 700, 420),
+                      # the top of OUR princess towers (cannon + red arrow, it turns with the cannon) read as an
+                      # enemy badge: 7,997 detections in the 2026-11-15/16 runs, all full HP, never named; 26
+                      # damaged ones (maybe real units) also fall inside (experiments #37, #38)
+                      (140, 1330, 300, 1410), (780, 1330, 940, 1410)]
 DEPLOY_X = (50, 1030)                          # playable arena width
 OUR_DEPLOY_Y = (1120, 1700)                    # our side: just below the river .. behind the king
 BACK = {"left": (380, 1640), "right": (700, 1640)}   # behind the king tower, to build a push
 OUR_TOWER_BODIES = [(90, 1320, 350, 1480), (730, 1320, 990, 1480)]   # ignored for our own badges
 NEXT_LABEL_BOX = (0, 2100, 300, 2350)          # search area for templates_ui/next_label.png
 BRIDGE = {"left": (226, 1120), "right": (854, 1120)}
-# Defensive spots: in front of each princess tower, and the center pull spot.
-DEFEND = {"left": (300, 1380), "right": (780, 1380)}
+# Center pull spots (the rule brain's lure).
 CENTER_PULL = {"left": (430, 1330), "right": (650, 1330)}
 OUR_KING = (540, 1600)                         # our king tower center (1v1 frames)
 ENEMY_KING = (540, 330)                        # their king tower center

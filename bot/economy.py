@@ -37,7 +37,3 @@ class EnemyElixir:
     def enemy_played(self, now, cost=UNKNOWN_COST, note=""):
         self.value = max(0.0, self.value - cost)
         self.plays.append((now, cost, note))
-
-    def advantage(self, our_elixir):
-        """Positive = we have more elixir than they do."""
-        return our_elixir - self.value

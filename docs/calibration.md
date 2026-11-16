@@ -47,3 +47,20 @@ All values live in `bot/layout.py`. Measured from 2v2 screenshots on 2026-11-08 
 Have: witch, tombstone, poison, ram (from `calib/battle_7elixir.png`).
 Missing: hog, golden_knight, minions, log. Get them with `python -m tools.grab --cards` while each
 is in hand, then copy the right `shots/slot<N>_*.png` to `templates/<name>.png`.
+
+## Unused coordinates kept for reference (removed from code 2026-11-16, nothing read them)
+
+- TV Royale list: Watch buttons of the first two entries at y 1171 and 1697 (x 898 is still in
+  tools/tvroyale.py). Measured 2026-11-09.
+- Defensive spots in front of our princess towers: left (300, 1380), right (780, 1380). Set by hand
+  for the rule brain, never measured against outcomes.
+- "Our half" for threats: y 1080 (river line) to 1760.
+- TV Royale list entries: first entry's top edge y 735, entry height 526 px.
+
+## Badge levels and greyed hand cards (2026-11-16, experiments #39)
+
+- Enemy badge digits: white on the red badge, yellow on the level-15 style badge; read by
+  bot/levels.py from datasets/badge_levels (labelled from the 2026-11-15/16 enemy crops). Seen so far
+  on enemies: 13, 14, 15.
+- Greyed (unaffordable) hand cards: art saturation 75th percentile 6-15, in colour 135+ (threshold
+  60, vision.HandReader.GREY_SAT). Greyed art shows a refill sweep, so templates of it are unreliable.

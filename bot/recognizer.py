@@ -44,7 +44,8 @@ def grass_fraction(crop):
 
 
 class Recognizer:
-    def __init__(self, data=DATA, max_dist=0.9):     # 27 classes (2026-11-09): 0.9 = 96% precise, 31% answered
+    def __init__(self, data=DATA, max_dist=0.88):    # 474 crops (2026-11-16): 0.88 = 96.6% precise, 31% answered
+                                                      # (0.9 had dropped to 94.4%, 38%: #40)
         """max_dist 1.0: leave-one-out on 77 labelled crops (2026-11-09) answers 77% of units at 98%
         precision (0.95: 55% at 100%). Coverage matters because Poison and splash rules only act on
         named units. Unsure = None."""

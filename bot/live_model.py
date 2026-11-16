@@ -14,8 +14,20 @@ turned into exactly the input the model was trained on (tools/build_dataset.obse
   seen      enemy cards recognised so far
 Then: play if the gate says so, the best card if affordable, at its best LEGAL tile (the engine's
 check_deploy on a board with the real tower state, so pockets open when a tower falls), mapped back
-to screen pixels. Search (R6) is not used yet: it needs the whole board rebuilt in the simulator.
+to screen pixels.
+
+With --search (R6 on the phone): when the gate says play, the live board is rebuilt in RoyaleSim
+(bot/rebuild.py) and bot/search.Search (outcome score, 12 s look-ahead, the model plays both sides in
+the rollouts) picks WHICH card and WHERE. With --search-timing, search also decides WHEN: every think
+step WAIT is one of the candidates, the gate is not asked (#40). The hand-written spell checks below
+are skipped with search: it sees what a spell would hit. Search runs on a worker thread so the frame
+loop keeps tracking (150-300 ms per search); its answer is checked against the CURRENT hand and elixir
+before it is played. A rebuild/search error falls back to the plain model for that decision.
 """
+import copy
+from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
+import time
 import math
 
 import numpy as np
@@ -39,14 +51,13 @@ SPELL_REACH_PX = {"poison": 3.5 * L.TILE_PX, "fireball": 2.5 * L.TILE_PX, "arrow
 LOG_PATH_PX = (1.5 * L.TILE_PX, 11 * L.TILE_PX)    # half-width, length: the Log rolls up its lane
 FINISH_TOWER_BELOW = 0.3                # an enemy tower is a spell target only this low (a finish), else chip
 SPELL_TOP_TILES = 12                    # spells: among the model's top tiles, the one hitting the most enemies
-KEYS = {"our_left": 1, "our_right": 2, "enemy_left": 1, "enemy_right": 2}   # engine tower k (0 = king)
 
 
 class ModelPolicy(Policy):
     name = "model"
     THINK_S, AFTER_PLAY_S = 0.5, 1.0
 
-    def __init__(self, path, opponent, gate=0.0):
+    def __init__(self, path, opponent, gate=0.0, search=False, search_timing=False):
         from tools.build_dataset import Mapper
         torch.set_num_threads(2)
         ck = torch.load(path, map_location="cpu", weights_only=False)
@@ -65,6 +76,16 @@ class ModelPolicy(Policy):
         self.legal_cache = {}
         self.last_think = self.last_play = -math.inf
         self.last_exact, self.last_info = None, {}
+        self.search = self.rebuild = None
+        if search:
+            from .rebuild import Rebuild
+            from .search import Policy as SimPolicy, Search
+            self.search_timing = search_timing
+            self.search = Search(SimPolicy(self.model, self.sim.cost, gate), score="outcome",
+                                 timing="search" if search_timing else "model", horizon_s=12.0)
+            self.rebuild = Rebuild(self.cid)
+            self.worker, self.pending = ThreadPoolExecutor(1), None
+            self.name = "model+search" + ("+timing" if search_timing else "")
 
     # ------------------------------------------------------------- cards
     def cid(self, key):
@@ -166,9 +187,20 @@ class ModelPolicy(Policy):
     # ------------------------------------------------------------- decide
     def choose(self, state, ctx):
         now = ctx.now
+        if self.search is not None and self.pending is not None:
+            if not self.pending.done():
+                return WAIT, None, None                   # search still thinking: keep tracking
+            fut, self.pending = self.pending, None
+            try:
+                return self.act(fut.result(), state, now)
+            except Exception as e:
+                self.last_info = {"search_error": repr(e)[:200]}
         if now - self.last_think < self.THINK_S or now - self.last_play < self.AFTER_PLAY_S:
             return WAIT, None, None
         self.last_think = now
+        if self.search is not None and self.search_timing:
+            self.submit(state, ctx)
+            return WAIT, None, None
         x = [torch.from_numpy(a)[None] for a in self.observe(state, ctx)]
         with torch.no_grad():
             out = self.model(*x)
@@ -176,7 +208,13 @@ class ModelPolicy(Policy):
         self.last_info = {"gate": round(gate, 2)}
         if gate <= self.gate:
             return WAIT, None, None
+        if self.search is not None:
+            top = int(out["card"][0].argmax())
+            self.last_info["plain"] = "ability" if top == 4 else state.hand[top]
+            self.submit(state, ctx)
+            return WAIT, None, None
         slot = int(out["card"][0].argmax())
+        self.last_info["plain"] = slot
         if slot == 4:                                     # the Golden Knight's ability button
             if state.champion_ready and state.elixir >= 1:
                 self.last_play = now
@@ -203,4 +241,57 @@ class ModelPolicy(Policy):
         self.last_play = now
         self.ours.played(self.cid(card))
         self.last_info.update(card=card, tile=[cell % W_TILES, cell // W_TILES])
+        return Action("play", card, slot, int(px), int(py)), None, None
+
+    # ------------------------------------------------------------- search (worker thread)
+    def submit(self, state, ctx):
+        """Hand a snapshot of the board to the search worker (tracks keep changing in the main loop)."""
+        enemies = [SimpleNamespace(id=getattr(u, "id", None), card=u.card, x=u.x, y=u.y, hp=u.hp,
+                                   level=getattr(u, "level", None), play_index=getattr(u, "play_index", -1))
+                   for u in self.enemies(state, ctx)]
+        info = dict(self.last_info)
+        self.pending = self.worker.submit(self.think, copy.deepcopy(state), enemies,
+                                          copy.deepcopy(self.opponent), copy.deepcopy(self.ours), info)
+
+    def think(self, state, enemies, opponent, ours, info):
+        t0 = time.perf_counter()
+        battle, st, seen, counts, n = self.rebuild.build(state, enemies, opponent, ours)
+        t1 = time.perf_counter()
+        c = self.search.choose(battle, st, 0, seen, counts, decided=not self.search_timing)
+        t2 = time.perf_counter()
+        info.update(rebuild_ms=round(1000 * (t1 - t0), 1), search_ms=round(1000 * (t2 - t1), 1), units=n)
+        if getattr(self.rebuild, "last_error", None):
+            info["rebuild_error"] = self.rebuild.last_error[:200]
+            self.rebuild.last_error = None
+        card = None
+        if c is not None and c[1] < 4:
+            card = self.rebuild.our_key(st["players"][0]["hand"][c[1]])
+        return c, card, info
+
+    def act(self, result, state, now):
+        """The worker's answer, checked against the hand and elixir NOW (it was asked ~0.2 s ago)."""
+        c, card, info = result
+        self.last_info = info
+        if c is None:
+            info["search"] = "wait"
+            return WAIT, None, None
+        slot = c[1]
+        if slot >= 4:                                     # the Golden Knight's ability button
+            if not state.champion_ready or state.elixir < 1:
+                return WAIT, None, None
+            self.last_play = now
+            info.update(card="ability")
+            return ABILITY, None, None
+        if state.hand[slot] != card:                      # unread slot (a guess), or the hand changed since
+            info["hand_mismatch"] = [state.hand[slot], card]
+            return WAIT, None, None
+        if CARDS.get(card, {}).get("cost", 99) > state.elixir:
+            info["short_of_elixir"] = card
+            return WAIT, None, None
+        tx, ty = c[2] / TILE, c[3] / TILE
+        px, py = to_px(tx, ty)
+        self.last_exact = (int(px), int(py))
+        self.last_play = now
+        self.ours.played(self.cid(card))
+        info.update(card=card, tile=[round(tx, 1), round(ty, 1)])
         return Action("play", card, slot, int(px), int(py)), None, None

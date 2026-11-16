@@ -13,7 +13,7 @@ Wizard + Valkyrie (run 010908, 135s) and a Poison on full-HP Barbarians.
 import math
 
 from . import layout as L
-from .profiles import SPELLS, profile, remaining_hp, unit_value
+from .profiles import SPELLS, remaining_hp, unit_value
 
 ELIXIR_HP = 80.0            # 1 elixir ~ 80 tower HP (prior)
 PARTIAL = 0.35              # value of damage that doesn't kill, relative to a kill

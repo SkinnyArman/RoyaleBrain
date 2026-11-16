@@ -14,7 +14,6 @@ HP, label = card. Squares = towers. Faint discs = spells; dots = projectiles. He
 crowns. Encoded with ffmpeg (H.264) so it plays in QuickTime and browsers.
 """
 import argparse
-import json
 import random
 import subprocess
 import time
